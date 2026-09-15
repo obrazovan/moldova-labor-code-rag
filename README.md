@@ -24,7 +24,8 @@
 
 ```text
 ├── configs/
-│   └── sources.json             # Конфигурация источников документов
+│   ├── sources.json             # Конфигурация источников документов
+│   └── embeddings.json          # Параметры моделей эмбеддингов и ChromaDB
 ├── data/
 │   ├── raw/                     # Исходные HTML-документы, метаданные и манифест
 │   │   ├── codul_muncii.html    # Трудовой кодекс РМ (Закон № 154/2003)
@@ -45,6 +46,8 @@
 │   │   ├── chunker.py           # Класс TextChunker (4 стратегии)
 │   │   └── pipeline.py          # Главный конвейер предобработки
 │   ├── embeddings/              # Векторизация и работа с векторным индексом
+│   │   ├── embedder.py          # Класс EmbeddingModel (SentenceTransformer на CPU)
+│   │   └── indexer.py           # Класс VectorIndexer (ChromaDB хранилище и батчинг)
 │   ├── retrieval/               # Поиск документов
 │   ├── reranking/               # Реранкинг результатов
 │   ├── generation/              # Генерация ответа
@@ -142,6 +145,77 @@ python -m src.preprocessing.pipeline
 
 ---
 
+## Этап 3: Векторизация и Vector Database (Embeddings & Vector Indexing)
+
+В рамках третьего этапа реализована подсистема векторизации и локального хранения векторных индексов нормативных документов на базе `Sentence-Transformers` и `ChromaDB`:
+
+### 1. Обоснование выбора моделей эмбеддингов
+
+В конфигурационном файле `configs/embeddings.json` зарегистрированы две взаимодополняющие модели, оптимизированные для быстрого и точного инференса на CPU:
+
+| Модель / Алиас | HuggingFace Identifier | Размерность | Язык | Назначение и обоснование |
+|---|---|---|---|---|
+| **rubert-tiny2** *(по умолчанию)* | `cointegrated/rubert-tiny2` | **312** | ru | Компактная модель (~29M параметров, ~118 МБ). Обучена на корпусах русскоязычных текстов, превосходно понимает юридическую терминологию и синтаксис ТК РМ, обеспечивая максимальную скорость векторизации на CPU. |
+| **multilingual-e5-small** | `intfloat/multilingual-e5-small` | **384** | multilingual (100+ языков) | Высокоточная мультиязычная модель (~118M параметров, ~470 МБ) с поддержкой асимметричного поиска. Требует префикс `query: ` для запросов, что реализовано автоматически в методе `encode_query()`. Идеальна для сравнительных тестов и мультиязычных запросов (RU/RO/EN). |
+
+- **Инференс на CPU**: Принудительная инициализация с `device="cpu"` гарантирует полную переносимость и работу на любой рабочей станции без зависимости от дискретных видеокарт CUDA.
+- **Нормализация векторов**: Все методы кодирования документов (`encode_documents`) и поисковых запросов (`encode_query`) используют `normalize_embeddings=True` ($L_2$-нормализация), что позволяет рассчитывать косинусное сходство через скалярное произведение, оптимизируя вычисления в HNSW.
+
+### 2. Обоснование выбора ChromaDB
+
+В качестве векторного хранилища выбрана **ChromaDB**:
+- **Встраиваемая (Embedded) архитектура**: Работает напрямую в процессе Python через `chromadb.PersistentClient(path="chroma_db")` без необходимости запуска отдельных контейнеров Docker или сетевых сервисов (в отличие от Qdrant, Milvus или Weaviate).
+- **Метрика расстояния Cosine**: Коллекции инициализируются с параметром `metadata={"hnsw:space": "cosine"}`, что строго соответствует $L_2$-нормализованным эмбеддингам.
+- **Идемпотентность (`upsert`)**: Загрузка векторов выполняется через метод `upsert()`, гарантируя безопасный повторный запуск без риска дублирования чанков.
+- **Локальная персистентность**: Все индексы и метаданные сохраняются в директорию `chroma_db/` (добавлена в `.gitignore`).
+
+### 3. Конфигурация (`configs/embeddings.json`)
+
+```json
+{
+  "default_model": "rubert-tiny2",
+  "models": {
+    "rubert-tiny2": {
+      "name": "cointegrated/rubert-tiny2",
+      "dimensions": 312,
+      "language": "ru"
+    },
+    "multilingual-e5-small": {
+      "name": "intfloat/multilingual-e5-small",
+      "dimensions": 384,
+      "language": "multilingual"
+    }
+  },
+  "batch_size": 32,
+  "persist_directory": "chroma_db"
+}
+```
+
+### 4. Запуск индексации и бенчмарк
+
+Индексация основного набора чанков (`chunks_by_article.json`) запускается командой:
+```bash
+python -m src.embeddings.indexer
+```
+
+Также поддерживается индексация альтернативных моделей и наборов:
+```bash
+# Индексация с мультиязычной моделью multilingual-e5-small
+python -m src.embeddings.indexer --model multilingual-e5-small
+
+# Индексация чанков с перекрытием (fixed_overlap)
+python -m src.embeddings.indexer --file data/processed/chunks_fixed_overlap.json --model rubert-tiny2
+```
+
+#### Результаты построения индекса (CPU, batch_size=32):
+- **Объем данных**: 430 статей Трудового кодекса (`chunks_by_article.json`)
+- **Модель**: `cointegrated/rubert-tiny2` (312 dim)
+- **Время построения индекса**: **~19.0 секунд**
+- **Скорость векторизации**: **~22.6 чанков/сек**
+- **Коллекция ChromaDB**: `chunks_by_article_rubert-tiny2` (430 векторов)
+
+---
+
 ## Установка и запуск
 
 ### 1. Клонирование репозитория
@@ -174,4 +248,9 @@ python -m src.grabber.legis_grabber
 ### 5. Запуск предобработки и чанкинга (Этап 2: Pipeline)
 ```bash
 python -m src.preprocessing.pipeline
+```
+
+### 6. Запуск векторизации и построения индекса ChromaDB (Этап 3: Indexer)
+```bash
+python -m src.embeddings.indexer
 ```

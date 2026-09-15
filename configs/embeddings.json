@@ -1,0 +1,17 @@
+{
+  "default_model": "rubert-tiny2",
+  "models": {
+    "rubert-tiny2": {
+      "name": "cointegrated/rubert-tiny2",
+      "dimensions": 312,
+      "language": "ru"
+    },
+    "multilingual-e5-small": {
+      "name": "intfloat/multilingual-e5-small",
+      "dimensions": 384,
+      "language": "multilingual"
+    }
+  },
+  "batch_size": 32,
+  "persist_directory": "chroma_db"
+}
