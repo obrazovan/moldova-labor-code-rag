@@ -49,6 +49,7 @@ desktop.ini
 
 # Vector DB & dynamic artifacts
 chroma_db/
+models_cache/
 *.sqlite3
 
 # AI Agent & Internal IDE configs

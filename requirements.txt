@@ -3,3 +3,4 @@ beautifulsoup4>=4.12.0
 sentence-transformers>=2.2.2
 chromadb>=0.4.0
 torch>=2.0.0
+flashrank>=0.2.10
