@@ -1,7 +1,7 @@
 {
   "retriever_top_k": 20,
   "reranker_top_n": 5,
-  "similarity_threshold": 0.35,
+  "similarity_threshold": 0.45,
   "min_chunk_chars": 30,
   "reranker_model": "ms-marco-MiniLM-L-12-v2"
 }

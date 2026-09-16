@@ -101,7 +101,7 @@ class ContextFilter:
         """
         cfg = config or {}
         min_chars = cfg.get("min_chunk_chars", 30)
-        threshold = cfg.get("similarity_threshold", 0.35)
+        threshold = cfg.get("similarity_threshold", 0.45)
 
         # 1. Фильтр длины
         result = cls.filter_by_min_length(chunks, min_chars=min_chars)

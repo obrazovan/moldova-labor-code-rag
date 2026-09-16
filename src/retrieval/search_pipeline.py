@@ -137,7 +137,7 @@ class SearchPipeline:
                 "final_count": count_final,
                 "retriever_top_k": k,
                 "reranker_top_n": n,
-                "similarity_threshold": self.config.get("similarity_threshold", 0.35),
+                "similarity_threshold": self.config.get("similarity_threshold", 0.45),
                 "min_chunk_chars": self.config.get("min_chunk_chars", 30),
             },
         }
