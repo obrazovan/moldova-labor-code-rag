@@ -33,6 +33,7 @@ venv.bak/
 # Environment variables & secrets
 .env
 .env.*
+!.env.example
 *.local
 
 # IDE and Editor configurations
