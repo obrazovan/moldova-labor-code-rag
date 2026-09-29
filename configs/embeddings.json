@@ -1,5 +1,5 @@
 {
-  "default_model": "rubert-tiny2",
+  "default_model": "multilingual-e5-small",
   "models": {
     "rubert-tiny2": {
       "name": "cointegrated/rubert-tiny2",

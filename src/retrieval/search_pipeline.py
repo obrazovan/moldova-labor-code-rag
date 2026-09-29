@@ -1,6 +1,7 @@
 """
 Единый конвейер поиска, фильтрации и переранжирования документов.
 Связывает цепочку: Query -> Retriever (Top-20) -> Filters -> Reranker (Top-5).
+Включает подробный диагностический режим анализа выдачи.
 """
 
 from __future__ import annotations
@@ -35,21 +36,21 @@ logger = logging.getLogger(__name__)
 
 class SearchPipeline:
     """
-    Класс конвейера поиска: векторный поиск -> фильтрация контекста -> FlashRank реранкинг.
+    Класс конвейера поиска: векторный поиск -> фильтрация контекста -> реранкинг.
     """
 
     def __init__(
         self,
         config_path: str | Path | None = None,
-        collection_name: str = "chunks_by_article_rubert-tiny2",
-        embedder_model: str = "rubert-tiny2",
+        collection_name: str | None = None,
+        embedder_model: str | None = None,
         reranker_model: str | None = None,
     ) -> None:
         """
         Инициализация полного поискового конвейера.
         :param config_path: Путь к файлу configs/retrieval.json.
-        :param collection_name: Имя коллекции векторов ChromaDB.
-        :param embedder_model: Модель эмбеддингов для векторизации запросов.
+        :param collection_name: Имя коллекции векторов ChromaDB (если None, берется по умолчанию из конфига).
+        :param embedder_model: Модель эмбеддингов для векторизации запросов (если None, берется default_model).
         :param reranker_model: Модель реранкера (если None, берется из config).
         """
         self.config_path = Path(config_path) if config_path else DEFAULT_RETRIEVAL_CONFIG_PATH
@@ -85,42 +86,71 @@ class SearchPipeline:
         query: str,
         top_k: int | None = None,
         top_n: int | None = None,
+        verbose: bool = True,
     ) -> dict[str, Any]:
         """
         Выполнение полного цикла поиска:
         Query -> VectorRetriever -> ContextFilter -> DocumentReranker.
+        
+        Включает диагностический вывод:
+        - Какие конкретно статьи с номерами попали в Top-20 из ChromaDB
+        - Какие 5 статей остались после фильтра и реранкера (с баллами релевантности)
+
         :param query: Поисковый запрос.
         :param top_k: Число кандидатов первичного поиска (если None, из конфига).
         :param top_n: Число финальных документов после реранкинга (если None, из конфига).
-        :return: Словарь с результатами всех этапов:
-                 {
-                   'query': str,
-                   'raw_retrieved': list[dict],
-                   'filtered': list[dict],
-                   'reranked': list[dict],
-                   'stats': dict
-                 }
+        :param verbose: Выводить ли диагностические логи в stdout/логгер.
+        :return: Словарь с результатами всех этапов.
         """
         k = top_k if top_k is not None else self.retriever_top_k
         n = top_n if top_n is not None else self.reranker_top_n
 
         logger.info(f"Запуск поиска по запросу: '{query}' (top_k={k}, top_n={n})")
 
-        # 1. Первичный векторный поиск
+        # 1. Первичный векторный поиск из ChromaDB
         raw_candidates = self.retriever.retrieve(query=query, top_k=k)
         count_raw = len(raw_candidates)
+
+        # Диагностический вывод первичной выдачи ChromaDB
+        if verbose:
+            print(f"\n[ДИАГНОСТИКА] Первичный поиск ChromaDB (Top-{count_raw} кандидатов):")
+            for idx, doc in enumerate(raw_candidates, 1):
+                meta = doc.get("metadata", {})
+                art_num = meta.get("article_number", "—")
+                title = meta.get("title", "Без названия")
+                sim = doc.get("similarity_score", 0.0)
+                print(f"  #{idx:02d}: Статья {art_num} «{title}» (Similarity: {sim:.4f})")
 
         # 2. Фильтрация контекста
         filtered_candidates = self.filter.apply_all(raw_candidates, config=self.config)
         count_filtered = len(filtered_candidates)
 
-        # 3. Реранкинг FlashRank
+        # 3. Переранжирование (Cross-Encoder / FlashRank / Dense Fallback)
         final_documents = self.reranker.rerank(
             query=query,
             documents=filtered_candidates,
             top_n=n,
         )
         count_final = len(final_documents)
+
+        # Диагностический вывод финальной выдачи после реранкера
+        if verbose:
+            print(f"\n[ДИАГНОСТИКА] Отобрано реранкером ({self.reranker.mode}) (Top-{count_final} статей):")
+            for idx, doc in enumerate(final_documents, 1):
+                meta = doc.get("metadata", {})
+                art_num = meta.get("article_number", "—")
+                title = meta.get("title", "Без названия")
+                r_score = doc.get("rerank_score", 0.0)
+                sim = doc.get("similarity_score", 0.0)
+                # Определяем исходную позицию в ChromaDB
+                doc_id = doc.get("id")
+                orig_pos = next((i + 1 for i, d in enumerate(raw_candidates) if d.get("id") == doc_id), None)
+                orig_str = f"исходная #{orig_pos}" if orig_pos is not None else "новая"
+                print(
+                    f"  #{idx}: Статья {art_num} «{title}» | "
+                    f"Rerank Score: {r_score:.4f} | "
+                    f"Vector Sim: {sim:.4f} | ({orig_str})"
+                )
 
         logger.info(
             f"Поиск завершен: извлечено {count_raw} -> отфильтровано {count_filtered} -> отобрано в топ-{count_final}"
@@ -137,7 +167,9 @@ class SearchPipeline:
                 "final_count": count_final,
                 "retriever_top_k": k,
                 "reranker_top_n": n,
-                "similarity_threshold": self.config.get("similarity_threshold", 0.45),
+                "reranker_mode": self.reranker.mode,
+                "reranker_model": self.reranker.model_name,
+                "similarity_threshold": self.config.get("similarity_threshold", 0.50),
                 "min_chunk_chars": self.config.get("min_chunk_chars", 30),
             },
         }
@@ -152,7 +184,6 @@ def format_doc_card(rank: int, doc: dict[str, Any], score_key: str, score_label:
     sim_score = doc.get("similarity_score", 0.0)
     chunk_id = doc.get("id", "—")
 
-    # Превью текста (первые 200 символов, без лишних переносов строк)
     text = doc.get("text", "").replace("\n", " ").strip()
     preview = (text[:220] + "...") if len(text) > 220 else text
 
@@ -206,7 +237,8 @@ def main() -> None:
         f"Параметры: Top-K Retriever = {stats['retriever_top_k']} | "
         f"Порог сходства >= {stats['similarity_threshold']} | "
         f"Мин. символов = {stats['min_chunk_chars']} | "
-        f"Top-N Reranker = {stats['reranker_top_n']}"
+        f"Top-N Reranker = {stats['reranker_top_n']} | "
+        f"Модель реранкера = {stats.get('reranker_model')}"
     )
     print(
         f"Воронка документов: Найдено в ChromaDB: {stats['raw_count']} -> "
@@ -227,14 +259,14 @@ def main() -> None:
 
     # 2. Топ-3 после реранкинга (из Reranker)
     print("\n" + sub_divider)
-    print("2. ТОП-3 ПОСЛЕ РЕРАНКИНГА (Выдача Cross-Encoder FlashRank Reranker):")
+    print(f"2. ТОП-3 ПОСЛЕ РЕРАНКИНГА ({stats.get('reranker_mode')} Reranker):")
     print(sub_divider)
     top3_reranked = reranked_docs[:3]
     if not top3_reranked:
         print("  Документы не найдены.")
     else:
         for idx, doc in enumerate(top3_reranked, 1):
-            print(format_doc_card(idx, doc, "rerank_score", "FlashRank Score"))
+            print(format_doc_card(idx, doc, "rerank_score", "Rerank Score"))
 
     # 3. Анализ различий
     print("\n" + sub_divider)
@@ -245,13 +277,12 @@ def main() -> None:
         rerank_top1_art = top3_reranked[0].get("metadata", {}).get("article_number")
 
         print(f"  • Лидер векторного поиска:    Статья {raw_top1_art} (Similarity = {top3_raw[0].get('similarity_score', 0):.4f})")
-        print(f"  • Лидер после FlashRank:     Статья {rerank_top1_art} (FlashRank Score = {top3_reranked[0].get('rerank_score', 0):.4f})")
+        print(f"  • Лидер после Reranker:      Статья {rerank_top1_art} (Rerank Score = {top3_reranked[0].get('rerank_score', 0):.4f})")
 
-        # Позиция лидера реранкера в исходной выдаче
         rerank_top1_id = top3_reranked[0].get("id")
         orig_pos = next((i + 1 for i, d in enumerate(raw_docs) if d.get("id") == rerank_top1_id), None)
         if orig_pos:
-            print(f"  • Позиция целевой статьи {rerank_top1_art} в первичном поиске: #{orig_pos} -> поднялась на #1")
+            print(f"  • Позиция статьи {rerank_top1_art} в первичном поиске: #{orig_pos} -> поднялась на #1")
 
     print(divider + "\n")
 

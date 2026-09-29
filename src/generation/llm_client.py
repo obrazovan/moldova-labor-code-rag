@@ -81,7 +81,7 @@ class GeminiClient:
         )
 
         self.temperature = float(self.config.get("temperature", 0.0))
-        self.max_output_tokens = int(self.config.get("max_output_tokens", 1024))
+        self.max_output_tokens = max(int(self.config.get("max_output_tokens", 2048)), 2048)
         self.system_prompt = self.config.get("system_prompt", "")
 
         # 4. Инициализация официального клиента Google GenAI
@@ -173,27 +173,28 @@ class GeminiClient:
                     f"Ошибка при вызове Gemini API (попытка {attempt}/{max_retries}): {exc}"
                 )
 
-                # Обработка 404: если модель устарела или недоступна для данного ключа, пробуем fallback
-                if "404" in err_str and ("no longer available" in err_str or "NOT_FOUND" in err_str):
-                    fallback_model = "gemini-3.5-flash" if current_model != "gemini-3.5-flash" else "gemini-3.8-flash"
-                    logger.warning(
-                        f"Модель '{current_model}' недоступна (404 Not Found). "
-                        f"Автоматическое переключение на fallback модель '{fallback_model}'..."
-                    )
-                    current_model = fallback_model
-                    self.model_name = fallback_model
-                    continue
+                # Список поддерживаемых моделей для автоматического переключения при сбоях квоты/доступности
+                candidate_models = ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-flash-latest", "gemini-3.5-flash"]
 
-                # Обработка 503 High Demand: переключение на стабильную модель линейки Flash
-                if "503" in err_str and "high demand" in err_str.lower():
-                    backup_model = "gemini-3.5-flash" if current_model != "gemini-3.5-flash" else "gemini-3.8-flash"
-                    logger.warning(
-                        f"Модель '{current_model}' перегружена (503 High Demand). "
-                        f"Переключение на резервную модель '{backup_model}'..."
-                    )
-                    current_model = backup_model
-                    time.sleep(1.0)
-                    continue
+                # Обработка 404 / 503 / 429: переключение на следующую доступную модель
+                is_quota_or_unavailable = (
+                    ("404" in err_str and ("no longer available" in err_str or "NOT_FOUND" in err_str))
+                    or ("503" in err_str)
+                    or ("429" in err_str and ("quota" in err_str.lower() or "resource_exhausted" in err_str.lower()))
+                )
+
+                if is_quota_or_unavailable:
+                    next_models = [m for m in candidate_models if m != current_model]
+                    if next_models:
+                        fallback_model = next_models[attempt % len(next_models)]
+                        logger.warning(
+                            f"Модель '{current_model}' вернула временную ошибку ({err_str[:80]}...). "
+                            f"Автоматическое переключение на модель '{fallback_model}'..."
+                        )
+                        current_model = fallback_model
+                        self.model_name = fallback_model
+                        time.sleep(1.0)
+                        continue
 
                 # Если это последняя попытка — логируем ошибку и пробрасываем исключение
                 if attempt == max_retries:

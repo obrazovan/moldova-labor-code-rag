@@ -27,17 +27,17 @@ class VectorRetriever:
 
     def __init__(
         self,
-        collection_name: str = "chunks_by_article_rubert-tiny2",
+        collection_name: str | None = None,
         persist_directory: str | Path | None = None,
-        model_name_or_alias: str = "rubert-tiny2",
+        model_name_or_alias: str | None = None,
         retrieval_config_path: str | Path | None = None,
         embeddings_config_path: str | Path | None = None,
     ) -> None:
         """
         Инициализация векторного поисковика.
-        :param collection_name: Имя коллекции в ChromaDB (по умолчанию 'chunks_by_article_rubert-tiny2').
+        :param collection_name: Имя коллекции в ChromaDB (по умолчанию chunks_by_article_<model_alias>).
         :param persist_directory: Путь к директории базы данных ChromaDB (если None, берется из embeddings.json).
-        :param model_name_or_alias: Алиас или имя модели эмбеддингов для векторизации запросов.
+        :param model_name_or_alias: Алиас или имя модели эмбеддингов для векторизации запросов (если None, берется default_model).
         :param retrieval_config_path: Путь к конфигурации retrieval.json.
         :param embeddings_config_path: Путь к конфигурации embeddings.json.
         """
@@ -59,23 +59,28 @@ class VectorRetriever:
             project_root = Path(__file__).resolve().parent.parent.parent
             self.persist_directory = project_root / self.persist_directory
 
-        self.collection_name = collection_name
+        # Инициализация модели эмбеддингов для векторизации поисковых запросов
+        chosen_model = model_name_or_alias or self._embeddings_config.get("default_model", "multilingual-e5-small")
+        self.embedder = EmbeddingModel(
+            model_name_or_alias=chosen_model,
+            config_path=self._embeddings_cfg_path,
+        )
+
+        if collection_name:
+            self.collection_name = collection_name
+        else:
+            self.collection_name = f"chunks_by_article_{self.embedder.model_alias}"
+
         self.default_top_k = self._retrieval_config.get("retriever_top_k", 20)
 
         logger.info(
             f"Инициализация VectorRetriever: collection='{self.collection_name}', "
-            f"chroma_dir='{self.persist_directory}', model='{model_name_or_alias}'"
+            f"chroma_dir='{self.persist_directory}', model='{self.embedder.model_alias}'"
         )
 
         # Подключение к локальной ChromaDB
         self.client = chromadb.PersistentClient(path=str(self.persist_directory))
         self.collection = self.client.get_collection(name=self.collection_name)
-
-        # Инициализация модели эмбеддингов для векторизации поисковых запросов
-        self.embedder = EmbeddingModel(
-            model_name_or_alias=model_name_or_alias,
-            config_path=self._embeddings_cfg_path,
-        )
 
     @staticmethod
     def _load_json(path: Path) -> dict[str, Any]:

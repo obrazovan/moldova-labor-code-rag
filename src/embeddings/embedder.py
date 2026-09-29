@@ -22,30 +22,31 @@ class EmbeddingModel:
 
     def __init__(
         self,
-        model_name_or_alias: str = "rubert-tiny2",
+        model_name_or_alias: str | None = None,
         config_path: str | Path | None = None,
         batch_size: int = 32,
     ) -> None:
         """
         Инициализация модели.
-        :param model_name_or_alias: Алиас из configs/embeddings.json (например, rubert-tiny2, multilingual-e5-small)
-                                     или валидный идентификатор HuggingFace.
+        :param model_name_or_alias: Алиас из configs/embeddings.json (например, multilingual-e5-small, rubert-tiny2)
+                                     или валидный идентификатор HuggingFace. Если None, берется default_model из конфига.
         :param config_path: Путь к конфигурационному файлу (по умолчанию configs/embeddings.json).
         :param batch_size: Размер батча по умолчанию.
         """
         self._config_path = Path(config_path) if config_path else DEFAULT_CONFIG_PATH
         self._config = self._load_config(self._config_path)
 
-        self._model_alias = model_name_or_alias
+        default_alias = self._config.get("default_model", "multilingual-e5-small")
+        self._model_alias = model_name_or_alias or default_alias
         self._batch_size = batch_size
 
         models_cfg = self._config.get("models", {})
-        if model_name_or_alias in models_cfg:
-            entry = models_cfg[model_name_or_alias]
-            self._model_full_name: str = entry.get("name", model_name_or_alias)
+        if self._model_alias in models_cfg:
+            entry = models_cfg[self._model_alias]
+            self._model_full_name: str = entry.get("name", self._model_alias)
             self._dimension: int | None = entry.get("dimensions")
         else:
-            self._model_full_name = model_name_or_alias
+            self._model_full_name = self._model_alias
             self._dimension = None
 
         if "batch_size" in self._config:
@@ -101,9 +102,18 @@ class EmbeddingModel:
         if not texts:
             return []
 
+        is_e5 = (
+            "e5" in self._model_alias.lower()
+            or "e5" in self._model_full_name.lower()
+        )
+        formatted_texts = [
+            f"passage: {t}" if is_e5 and not t.startswith("passage: ") else t
+            for t in texts
+        ]
+
         bs = batch_size or self._batch_size
         embeddings = self.model.encode(
-            texts,
+            formatted_texts,
             batch_size=bs,
             normalize_embeddings=True,
             show_progress_bar=False,

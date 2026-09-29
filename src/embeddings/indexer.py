@@ -100,7 +100,7 @@ class VectorIndexer:
     def index_chunks(
         self,
         chunks_file_path: str | Path,
-        model_alias: str = "rubert-tiny2",
+        model_alias: str | None = None,
         collection_name: str | None = None,
         batch_size: int | None = None,
         reset_collection: bool = False,
@@ -108,7 +108,7 @@ class VectorIndexer:
         """
         Загрузка чанков из JSON, батчевая векторизация и сохранение в ChromaDB.
         :param chunks_file_path: Путь к JSON файлу со списком чанков.
-        :param model_alias: Алиас модели эмбеддингов (rubert-tiny2, multilingual-e5-small).
+        :param model_alias: Алиас модели эмбеддингов (по умолчанию из configs/embeddings.json).
         :param collection_name: Имя целевой коллекции (по умолчанию {file_stem}_{model_alias}).
         :param batch_size: Размер батча (если None, берется из конфига или 32).
         :param reset_collection: Если True, удаляет существующую коллекцию перед индексацией.
@@ -126,6 +126,8 @@ class VectorIndexer:
         if total_chunks == 0:
             logger.warning("Файл чанков пуст. Индексация отменена.")
             return {"total_chunks": 0}
+
+        model_alias = model_alias or self._config.get("default_model", "multilingual-e5-small")
 
         # Определение имени коллекции
         if collection_name is None:
@@ -219,8 +221,8 @@ def main() -> None:
     parser.add_argument(
         "--model",
         type=str,
-        default="rubert-tiny2",
-        help="Алиас или имя модели эмбеддингов (по умолчанию: rubert-tiny2)",
+        default=None,
+        help="Алиас или имя модели эмбеддингов (по умолчанию из configs/embeddings.json)",
     )
     parser.add_argument(
         "--collection",
