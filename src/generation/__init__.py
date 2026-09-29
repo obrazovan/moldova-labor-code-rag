@@ -6,8 +6,20 @@
 - rag_service: сквозной RAG конвейер
 """
 
-from src.generation.llm_client import GeminiClient
-from src.generation.prompt_builder import PromptBuilder
-from src.generation.rag_service import RAGService
+from typing import Any
+
+
+def __getattr__(name: str) -> Any:
+    if name == "GeminiClient":
+        from src.generation.llm_client import GeminiClient
+        return GeminiClient
+    if name == "PromptBuilder":
+        from src.generation.prompt_builder import PromptBuilder
+        return PromptBuilder
+    if name == "RAGService":
+        from src.generation.rag_service import RAGService
+        return RAGService
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = ["GeminiClient", "PromptBuilder", "RAGService"]

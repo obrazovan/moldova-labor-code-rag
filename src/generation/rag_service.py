@@ -193,21 +193,94 @@ def run_demonstration() -> None:
         print(sub_divider)
 
 
+def run_interactive(service: RAGService | None = None) -> None:
+    """
+    Интерактивный диалоговый режим (REPL):
+    Позволяет пользователю вводить любые вопросы в реальном времени.
+    Модели и индекс инициализируются один раз и остаются в оперативной памяти.
+    """
+    service = service or RAGService()
+    divider = "=" * 80
+    sub_divider = "-" * 80
+
+    print("\n" + divider)
+    print("ИНТЕРАКТИВНЫЙ РЕЖИМ RAG: ТРУДОВОЙ КОДЕКС РЕСПУБЛИКИ МОЛДОВА")
+    print("Задайте любой вопрос по Трудовому кодексу.")
+    print("Для завершения работы введите 'exit', 'quit' или 'q'.")
+    print(divider + "\n")
+
+    while True:
+        try:
+            query = input("\nВаш вопрос > ").strip()
+            if not query:
+                continue
+            if query.lower() in ("exit", "quit", "q", "выход"):
+                print("\nСессия завершена.")
+                break
+
+            start_time = time.perf_counter()
+            res = service.answer(query=query)
+            elapsed = time.perf_counter() - start_time
+
+            print("\n" + sub_divider)
+            print(f"[ОТВЕТ LLM] (время: {elapsed:.2f} сек, фрагментов в контексте: {len(res['retrieved_docs'])}):")
+            print(sub_divider)
+            print(res["answer"])
+
+            print("\n[ИСТОЧНИКИ]:")
+            if res["sources"]:
+                for s in res["sources"]:
+                    print(f"  • {s}")
+            else:
+                print("  (Источники не найдены или информации недостаточно)")
+            print(sub_divider)
+
+        except (KeyboardInterrupt, EOFError):
+            print("\nСессия завершена.")
+            break
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Сквозной запуск RAG-сервиса с генерацией ответов Gemini")
-    parser.add_argument("--query", type=str, default=None, help="Пользовательский вопрос (если не указан, запускаются 2 теста)")
+    parser = argparse.ArgumentParser(
+        description="Сквозной запуск RAG-сервиса (Retriever -> FlashRank -> Gemini LLM)"
+    )
+    parser.add_argument(
+        "-q", "--query",
+        type=str,
+        default=None,
+        help="Задать конкретный пользовательский вопрос",
+    )
+    parser.add_argument(
+        "-i", "--interactive",
+        action="store_true",
+        help="Запустить интерактивный диалоговый режим (REPL)",
+    )
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="Принудительно запустить 2 эталонных проверочных теста",
+    )
     args = parser.parse_args()
 
-    if args.query:
+    if args.interactive:
+        run_interactive()
+    elif args.query:
         service = RAGService()
         res = service.answer(args.query)
         print("\n" + "=" * 80)
         print(f"ВОПРОС: {res['query']}")
         print("=" * 80)
+        print("\n[ОТВЕТ LLM]:")
         print(res["answer"])
-        print("\nИСТОЧНИКИ:")
-        for s in res["sources"]:
-            print(f"• {s}")
-        print("=" * 80)
+        print("\n[ИСТОЧНИКИ]:")
+        if res["sources"]:
+            for s in res["sources"]:
+                print(f"  • {s}")
+        else:
+            print("  (Источники не указаны или информации недостаточно)")
+        print("=" * 80 + "\n")
     else:
         run_demonstration()
+        print("\nПодсказка:")
+        print("  • Чтобы задать свой вопрос:        python -m src.generation.rag_service --query \"Ваш вопрос\"")
+        print("  • Чтобы открыть интерактивный чат: python -m src.generation.rag_service -i\n")
