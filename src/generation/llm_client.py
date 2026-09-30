@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
 # Настройка UTF-8 вывода для Windows консолей
@@ -33,6 +34,39 @@ except Exception:
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "configs" / "generation.json"
+
+
+@dataclass
+class LLMGenerationResult:
+    """
+    Объект с результатом генерации ответа LLM и статистикой использования токенов.
+    """
+    text: str
+    prompt_token_count: int = 0
+    candidates_token_count: int = 0
+    total_token_count: int = 0
+    usage_metadata: dict[str, int] = field(default_factory=dict)
+    model_name: str = ""
+
+    @property
+    def prompt_tokens(self) -> int:
+        return self.prompt_token_count
+
+    @property
+    def candidates_tokens(self) -> int:
+        return self.candidates_token_count
+
+    @property
+    def total_tokens(self) -> int:
+        return self.total_token_count
+
+    def __str__(self) -> str:
+        return self.text
+
+    def __iter__(self):
+        """Поддержка распаковки кортежа: text, usage = client.generate(...)"""
+        yield self.text
+        yield self.usage_metadata
 
 
 class GeminiClient:
@@ -116,7 +150,7 @@ class GeminiClient:
         system_instruction: str | None = None,
         max_retries: int = 4,
         initial_delay: float = 2.0,
-    ) -> str:
+    ) -> LLMGenerationResult:
         """
         Отправка запроса к модели Gemini с переданным промптом и системной инструкцией.
 
@@ -124,11 +158,11 @@ class GeminiClient:
         :param system_instruction: Системная инструкция (если None, берется system_prompt из конфига).
         :param max_retries: Максимальное количество попыток при сетевых ошибках и лимитах (503/429).
         :param initial_delay: Начальная задержка экспоненциального бэкоффа в секундах.
-        :return: Сгенерированный текстовый ответ.
+        :return: Объект LLMGenerationResult с текстом ответа и статистикой токенов.
         """
         if not prompt or not prompt.strip():
-            logger.warning("Передан пустой промпт в метод generate(). Возврат пустой строки.")
-            return ""
+            logger.warning("Передан пустой промпт в метод generate(). Возврат пустого ответа.")
+            return LLMGenerationResult(text="", model_name=self.model_name)
 
         from google.genai import types
 
@@ -153,19 +187,41 @@ class GeminiClient:
                     config=gen_config,
                 )
 
-                # Извлечение сгенерированного текста
-                if response.text is not None:
-                    return response.text.strip()
+                # Извлечение статистики токенов из response.usage_metadata
+                prompt_tokens = 0
+                candidates_tokens = 0
+                total_tokens = 0
+                if hasattr(response, "usage_metadata") and response.usage_metadata:
+                    meta = response.usage_metadata
+                    prompt_tokens = int(getattr(meta, "prompt_token_count", 0) or 0)
+                    candidates_tokens = int(getattr(meta, "candidates_token_count", 0) or 0)
+                    total_tokens = int(getattr(meta, "total_token_count", 0) or (prompt_tokens + candidates_tokens))
 
-                # Если response.text равен None (например, при специфическом finish_reason)
-                if response.candidates and response.candidates[0].content:
+                usage_meta = {
+                    "prompt_token_count": prompt_tokens,
+                    "candidates_token_count": candidates_tokens,
+                    "total_token_count": total_tokens,
+                }
+
+                # Извлечение сгенерированного текста
+                text = ""
+                if response.text is not None:
+                    text = response.text.strip()
+                elif response.candidates and response.candidates[0].content:
                     parts = response.candidates[0].content.parts or []
                     extracted_text = "".join(
                         getattr(part, "text", "") for part in parts if hasattr(part, "text")
                     )
-                    return extracted_text.strip()
+                    text = extracted_text.strip()
 
-                return ""
+                return LLMGenerationResult(
+                    text=text,
+                    prompt_token_count=prompt_tokens,
+                    candidates_token_count=candidates_tokens,
+                    total_token_count=total_tokens,
+                    usage_metadata=usage_meta,
+                    model_name=current_model,
+                )
 
             except Exception as exc:
                 err_str = str(exc)
@@ -211,7 +267,7 @@ class GeminiClient:
                 time.sleep(delay)
                 delay *= 2.0
 
-        return ""
+        return LLMGenerationResult(text="", model_name=current_model)
 
 
 if __name__ == "__main__":

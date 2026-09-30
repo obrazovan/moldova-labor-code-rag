@@ -25,6 +25,7 @@ if sys.platform == "win32":
 from src.retrieval.search_pipeline import SearchPipeline
 from src.generation.prompt_builder import PromptBuilder
 from src.generation.llm_client import GeminiClient
+from src.generation.telemetry import TelemetryTracker
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,7 +38,8 @@ logger = logging.getLogger(__name__)
 class RAGService:
     """
     Главный сквозной сервис вопросно-ответной системы RAG.
-    Объединяет поиск (Retriever + Filter + Reranker), форматирование промпта и генерацию LLM.
+    Объединяет поиск (Retriever + Filter + Reranker), форматирование промпта,
+    генерацию LLM и систему телеметрии/наблюдаемости (Langfuse Tracing).
     """
 
     def __init__(
@@ -45,6 +47,7 @@ class RAGService:
         search_pipeline: SearchPipeline | None = None,
         prompt_builder: PromptBuilder | None = None,
         llm_client: GeminiClient | None = None,
+        telemetry: TelemetryTracker | None = None,
         retrieval_config_path: str | Path | None = None,
         generation_config_path: str | Path | None = None,
     ) -> None:
@@ -54,6 +57,7 @@ class RAGService:
         :param search_pipeline: Экземпляр поискового пайплайна (если None, создается новый).
         :param prompt_builder: Экземпляр строителя промптов (если None, создается новый).
         :param llm_client: Клиент Gemini (если None, инициализируется с дефолтным конфигом).
+        :param telemetry: Трекер телеметрии и трассировки Langfuse.
         :param retrieval_config_path: Путь к файлу configs/retrieval.json.
         :param generation_config_path: Путь к файлу configs/generation.json.
         """
@@ -62,6 +66,7 @@ class RAGService:
         self.search_pipeline = search_pipeline or SearchPipeline(config_path=retrieval_config_path)
         self.prompt_builder = prompt_builder or PromptBuilder()
         self.llm_client = llm_client or GeminiClient(config_path=generation_config_path)
+        self.telemetry = telemetry or TelemetryTracker()
 
         logger.info("RAGService успешно инициализирован и готов к обработке запросов.")
 
@@ -99,10 +104,11 @@ class RAGService:
     def answer(self, query: str) -> dict[str, Any]:
         """
         Сквозное выполнение запроса:
-        1. Поиск и реранкинг релевантных статей (SearchPipeline).
+        1. Поиск и реранкинг релевантных статей (SearchPipeline) с замером задержки.
         2. Формирование структурированного контекста (PromptBuilder).
-        3. Генерация ответа через LLM с защитой от галлюцинаций (GeminiClient).
-        4. Формирование структуры результата и источников.
+        3. Генерация ответа через LLM с защитой от галлюцинаций (GeminiClient) с замером задержки.
+        4. Логирование спанов и трейсов в Langfuse, расчет токенов и стоимости (TelemetryTracker).
+        5. Формирование структуры результата, источников и плашки метрик.
 
         :param query: Вопрос пользователя.
         :return: Словарь с ключами:
@@ -110,12 +116,19 @@ class RAGService:
                  - 'answer': сгенерированный LLM ответ
                  - 'retrieved_docs': список отобранных реранкером документов
                  - 'sources': список нормативных источников
+                 - 'metrics': метрики выполнения (задержки, токены, стоимость, трейс)
+                 - 'metrics_badge': отформатированная строка для вывода в CLI
         """
         clean_query = query.strip()
         logger.info(f"Обработка запроса пользователя: '{clean_query}'")
 
-        # 1. Поиск релевантных документов
+        t_total_start = time.perf_counter()
+
+        # 1. Поиск релевантных документов с точным замером времени
+        t_search_start = time.perf_counter()
         search_result = self.search_pipeline.search(query=clean_query)
+        search_latency_sec = time.perf_counter() - t_search_start
+        search_latency_ms = search_latency_sec * 1000.0
         retrieved_docs = search_result.get("reranked", [])
 
         # 2. Формирование промпта с контекстом
@@ -124,17 +137,45 @@ class RAGService:
             documents=retrieved_docs,
         )
 
-        # 3. Вызов Gemini LLM
-        generated_answer = self.llm_client.generate(prompt=user_message)
+        # 3. Вызов Gemini LLM с точным замером времени
+        t_llm_start = time.perf_counter()
+        gen_result = self.llm_client.generate(prompt=user_message)
+        llm_latency_sec = time.perf_counter() - t_llm_start
+        llm_latency_ms = llm_latency_sec * 1000.0
+
+        generated_answer = gen_result.text
+        usage_metadata = getattr(gen_result, "usage_metadata", {})
+
+        total_latency_sec = time.perf_counter() - t_total_start
+        total_latency_ms = total_latency_sec * 1000.0
 
         # 4. Извлечение источников
         sources = self._extract_sources(generated_answer, retrieved_docs)
+
+        # 5. Трассировка в Langfuse и формирование сводки метрик
+        telemetry_metrics = self.telemetry.log_rag_execution(
+            query=clean_query,
+            retrieved_docs=retrieved_docs,
+            final_answer=generated_answer,
+            search_latency_ms=search_latency_ms,
+            llm_latency_ms=llm_latency_ms,
+            usage_metadata=usage_metadata,
+            system_prompt=self.llm_client.system_prompt,
+            context_text=user_message,
+            model_name=getattr(gen_result, "model_name", self.llm_client.model_name),
+        )
+        metrics_badge = self.telemetry.format_metrics_badge(telemetry_metrics)
 
         return {
             "query": clean_query,
             "answer": generated_answer,
             "retrieved_docs": retrieved_docs,
             "sources": sources,
+            "metrics": telemetry_metrics,
+            "metrics_badge": metrics_badge,
+            "search_latency_sec": search_latency_sec,
+            "llm_latency_sec": llm_latency_sec,
+            "total_latency_sec": total_latency_sec,
         }
 
 
@@ -163,7 +204,7 @@ def run_demonstration() -> None:
     ]
 
     print("\n" + divider)
-    print("ДЕМОНСТРАЦИЯ RAG: ГЕНЕРАЦИЯ ОТВЕТА GEMINI И ЗАЩИТА ОТ ГАЛЛЮЦИНАЦИЙ (ЭТАП 5)")
+    print("ДЕМОНСТРАЦИЯ RAG: ГЕНЕРАЦИЯ ОТВЕТА GEMINI, ЗАЩИТА ОТ ГАЛЛЮЦИНАЦИЙ И ТЕЛЕМЕТРИЯ")
     print(divider)
 
     for idx, (test_name, query, expectation) in enumerate(test_queries, 1):
@@ -173,11 +214,9 @@ def run_demonstration() -> None:
         print(f"Вопрос: \"{query}\"")
         print(sub_divider)
 
-        start_time = time.perf_counter()
         result = service.answer(query=query)
-        elapsed = time.perf_counter() - start_time
 
-        print(f"Время выполнения: {elapsed:.2f} сек")
+        print(f"Время выполнения: {result['total_latency_sec']:.2f} сек")
         print(f"Отобрано фрагментов в контекст: {len(result['retrieved_docs'])}")
 
         print("\n[СГЕНЕРИРОВАННЫЙ ОТВЕТ LLM]:")
@@ -189,6 +228,9 @@ def run_demonstration() -> None:
                 print(f"  • {src}")
         else:
             print("  (Источники отсутствуют — в контексте не найдено подтверждающих норм)")
+
+        if result.get("metrics_badge"):
+            print("\n" + result["metrics_badge"])
 
         print(sub_divider)
 
@@ -218,12 +260,10 @@ def run_interactive(service: RAGService | None = None) -> None:
                 print("\nСессия завершена.")
                 break
 
-            start_time = time.perf_counter()
             res = service.answer(query=query)
-            elapsed = time.perf_counter() - start_time
 
             print("\n" + sub_divider)
-            print(f"[ОТВЕТ LLM] (время: {elapsed:.2f} сек, фрагментов в контексте: {len(res['retrieved_docs'])}):")
+            print(f"[ОТВЕТ LLM] (время: {res['total_latency_sec']:.2f} сек, фрагментов в контексте: {len(res['retrieved_docs'])}):")
             print(sub_divider)
             print(res["answer"])
 
@@ -233,6 +273,9 @@ def run_interactive(service: RAGService | None = None) -> None:
                     print(f"  • {s}")
             else:
                 print("  (Источники не найдены или информации недостаточно)")
+
+            if res.get("metrics_badge"):
+                print("\n" + res["metrics_badge"])
             print(sub_divider)
 
         except (KeyboardInterrupt, EOFError):
@@ -278,6 +321,8 @@ if __name__ == "__main__":
                 print(f"  • {s}")
         else:
             print("  (Источники не указаны или информации недостаточно)")
+        if res.get("metrics_badge"):
+            print("\n" + res["metrics_badge"])
         print("=" * 80 + "\n")
     else:
         run_demonstration()

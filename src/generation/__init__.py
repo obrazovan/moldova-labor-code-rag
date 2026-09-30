@@ -19,7 +19,13 @@ def __getattr__(name: str) -> Any:
     if name == "RAGService":
         from src.generation.rag_service import RAGService
         return RAGService
+    if name == "TelemetryTracker":
+        from src.generation.telemetry import TelemetryTracker
+        return TelemetryTracker
+    if name == "LLMGenerationResult":
+        from src.generation.llm_client import LLMGenerationResult
+        return LLMGenerationResult
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-__all__ = ["GeminiClient", "PromptBuilder", "RAGService"]
+__all__ = ["GeminiClient", "PromptBuilder", "RAGService", "TelemetryTracker", "LLMGenerationResult"]

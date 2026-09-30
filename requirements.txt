@@ -7,3 +7,4 @@ flashrank>=0.2.10
 google-genai>=0.1.1
 python-dotenv>=1.0.0
 matplotlib>=3.8.0
+langfuse>=2.0.0
