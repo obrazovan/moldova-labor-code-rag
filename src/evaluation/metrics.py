@@ -199,7 +199,12 @@ def compute_aggregate_metrics(
             p_sum += p
             r_sum += r
 
+        mrr_k_sum = sum(
+            calculate_mrr(rec["retrieved_articles"][:k], rec["target_articles"])
+            for rec in eval_records
+        )
         summary[f"hit_rate@{k}"] = round(hit_sum / total, 4)
+        summary[f"mrr@{k}"] = round(mrr_k_sum / total, 4)
         summary[f"precision@{k}"] = round(p_sum / total, 4)
         summary[f"recall@{k}"] = round(r_sum / total, 4)
 

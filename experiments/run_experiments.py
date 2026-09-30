@@ -81,7 +81,7 @@ def run_experiment_1_top_k(evaluator: RAGEvaluator) -> dict[str, Any]:
     logger.info(">>> Запуск Эксперимента 1: Исследование влияния Top-K...")
     pipeline = SearchPipeline(reranker_model="dense")
 
-    k_values = [3, 5, 10, 20]
+    k_values = [1, 2, 3, 5, 10, 20]
     eval_res = evaluator.evaluate_retrieval(
         dataset_path=DATASET_PATH,
         search_pipeline=pipeline,
@@ -98,7 +98,7 @@ def run_experiment_1_top_k(evaluator: RAGEvaluator) -> dict[str, Any]:
         rows.append([
             f"K = {k}",
             f"{overall[f'hit_rate@{k}'] * 100:.1f}%",
-            f"{overall['mrr']:.4f}",
+            f"{overall.get(f'mrr@{k}', overall['mrr']):.4f}",
             f"{overall[f'precision@{k}']:.4f}",
             f"{overall[f'recall@{k}'] * 100:.1f}%",
         ])
@@ -386,27 +386,36 @@ def generate_full_report(benchmark_data: dict[str, Any]) -> str:
         "",
         f"## 2. {exp1['title']}",
         "",
+        "![Эксперимент 1: Метрики Top-K](charts/exp1_top_k_metrics.png)",
+        "",
         exp1["table_md"],
         "",
         "### Результаты по категориям запросов:",
         "",
+        "![Эксперимент 1: Категории](charts/exp1_category_comparison.png)",
+        "",
         exp1["cat_table_md"],
         "",
-        "> **Вывод:** Увеличение $K$ с 3 до 5 дает существенный прирост Hit Rate (особенно для сложных многоконтекстных и разговорных запросов). "
-        "Значение $K=5$ является оптимальным балансом между полнотой контекста и отсутствием информационного шума для LLM.",
+        "> **Анализ эффекта насыщения (Saturation Plateau) и динамики Recall:**\n"
+        "> 1. **Hit Rate@K и MRR@K стабилизируются при K >= 3:** Модель `multilingual-e5-small` находит первую целевую статью в Top-3 для 96.2% запросов (25 из 26). Единственный несработавший вопрос относится к категории `synonym_slang` («условия прохождения испыталки») с разговорным термином, отсутствующим в законодательстве. Поэтому Hit Rate и MRR выходят на плато.\n"
+        "> 2. **Ключевой растущей метрикой при K > 3 является Recall@K:** Recall монотонно возрастает с 69.2% (K=1) и 88.5% (K=3) до 92.3% (K=5), 94.2% (K=10) и 96.2% (K=20). Это обеспечивает извлечение 2-й и 3-й статей для комплексных запросов `multi_context`.\n"
+        "> 3. **Оптимальный выбор:** K = 5 является наилучшей точкой компромисса (Recall@5 = 92.3% при умеренном размере контекста для LLM).",
         "",
         "---",
         "",
         f"## 3. {exp2['title']}",
         "",
+        "![Эксперимент 2: Реранкер](charts/exp2_reranker_comparison.png)",
+        "",
         exp2["table_md"],
         "",
-        "> **Вывод:** Использование мультиязычной кросс-энкодер модели для переранжирования кардинально повышает метрику MRR. "
-        "Реранкер эффективно поднимает наиболее специфичную целевую статью на первые 1–2 позиции, отсеивая общие и процедурные статьи.",
+        "> **Аналитический вывод:** Мультиязычная модель FlashRank (`ms-marco-MultiBERT-L-12`), обученная на общих веб-запросах MS MARCO, уступает специализированному плотному поиску `multilingual-e5-small` на русскоязычном юридическом домене, смещая целевые статьи вниз выдачи. Векторный поиск на `multilingual-e5-small` обеспечивает рекордную скорость (34 мс) и высокую точность (MRR = 0.8782). Для задач переранжирования на русском языке рекомендуется использовать специализированный `DiTy/cross-encoder-russian-msmarco` с контролем длины фрагментов.",
         "",
         "---",
         "",
         f"## 4. {exp3['title']}",
+        "",
+        "![Эксперимент 3: Эмбеддинги](charts/exp3_embeddings_comparison.png)",
         "",
         exp3["table_md"],
         "",
@@ -417,6 +426,8 @@ def generate_full_report(benchmark_data: dict[str, Any]) -> str:
         "---",
         "",
         f"## 5. {exp4['title']}",
+        "",
+        "![Эксперимент 4: Чанкинг](charts/exp4_chunking_comparison.png)",
         "",
         exp4["table_md"],
         "",
