@@ -1,0 +1,242 @@
+[
+  {
+    "id": 1,
+    "question": "Какова стандартная нормальная продолжительность рабочего времени в неделю?",
+    "target_articles": ["95"],
+    "category": "factual",
+    "expected_answer_keywords": ["40 часов", "в неделю"],
+    "is_answerable": true
+  },
+  {
+    "id": 2,
+    "question": "Какова стандартная продолжительность ежедневной работы при пятидневной рабочей неделе?",
+    "target_articles": ["100"],
+    "category": "factual",
+    "expected_answer_keywords": ["8 часов"],
+    "is_answerable": true
+  },
+  {
+    "id": 3,
+    "question": "Какова минимальная стандартная продолжительность ежегодного оплачиваемого отпуска?",
+    "target_articles": ["113"],
+    "category": "factual",
+    "expected_answer_keywords": ["28", "календарных дней"],
+    "is_answerable": true
+  },
+  {
+    "id": 4,
+    "question": "Какова минимальная продолжительность перерыва для питания и отдыха в течение рабочего дня?",
+    "target_articles": ["107"],
+    "category": "factual",
+    "expected_answer_keywords": ["30 минут"],
+    "is_answerable": true
+  },
+  {
+    "id": 5,
+    "question": "Какова минимальная непрерывная продолжительность еженедельного отдыха?",
+    "target_articles": ["109"],
+    "category": "factual",
+    "expected_answer_keywords": ["42 часа"],
+    "is_answerable": true
+  },
+  {
+    "id": 6,
+    "question": "Какое максимальное количество часов сверхурочной работы допускается в течение календарного года по общему правилу?",
+    "target_articles": ["104"],
+    "category": "factual",
+    "expected_answer_keywords": ["120 часов"],
+    "is_answerable": true
+  },
+  {
+    "id": 7,
+    "question": "Какое время суток считается ночным временем согласно Трудовому кодексу?",
+    "target_articles": ["103"],
+    "category": "factual",
+    "expected_answer_keywords": ["22:00", "6:00"],
+    "is_answerable": true
+  },
+  {
+    "id": 8,
+    "question": "Какова максимальная продолжительность отпуска без сохранения заработной платы по семейным обстоятельствам?",
+    "target_articles": ["120"],
+    "category": "factual",
+    "expected_answer_keywords": ["120", "календарных дней"],
+    "is_answerable": true
+  },
+  {
+    "id": 9,
+    "question": "Какой максимальный срок испытания может быть установлен при приеме на работу рядового работника?",
+    "target_articles": ["60"],
+    "category": "specific_search",
+    "expected_answer_keywords": ["3 месяца"],
+    "is_answerable": true
+  },
+  {
+    "id": 10,
+    "question": "Кому запрещается устанавливать испытательный срок при приеме на работу?",
+    "target_articles": ["62"],
+    "category": "specific_search",
+    "expected_answer_keywords": ["беременным", "несовершеннолетним", "молодым специалистам"],
+    "is_answerable": true
+  },
+  {
+    "id": 11,
+    "question": "За сколько дней работник обязан письменно предупредить работодателя об увольнении по собственному желанию (отставке)?",
+    "target_articles": ["85"],
+    "category": "specific_search",
+    "expected_answer_keywords": ["14", "календарных дней", "отставка"],
+    "is_answerable": true
+  },
+  {
+    "id": 12,
+    "question": "По каким законным основаниям работодатель вправе уволить работника по своей инициативе?",
+    "target_articles": ["86"],
+    "category": "specific_search",
+    "expected_answer_keywords": ["ликвидация", "сокращение", "несоответствие", "нарушение"],
+    "is_answerable": true
+  },
+  {
+    "id": 13,
+    "question": "Какие виды дисциплинарных взысканий могут применяться к работнику за нарушение трудовой дисциплины?",
+    "target_articles": ["206"],
+    "category": "specific_search",
+    "expected_answer_keywords": ["замечание", "выговор", "строгий выговор", "увольнение"],
+    "is_answerable": true
+  },
+  {
+    "id": 14,
+    "question": "В течение какого срока действует дисциплинарное взыскание со дня его применения?",
+    "target_articles": ["211"],
+    "category": "specific_search",
+    "expected_answer_keywords": ["одного года", "1 год"],
+    "is_answerable": true
+  },
+  {
+    "id": 15,
+    "question": "В каких случаях действие индивидуального трудового договора приостанавливается по обстоятельствам, не зависящим от воли сторон?",
+    "target_articles": ["76"],
+    "category": "specific_search",
+    "expected_answer_keywords": ["отпуск по беременности", "болезнь", "форс-мажор"],
+    "is_answerable": true
+  },
+  {
+    "id": 16,
+    "question": "За сколько времени работодатель обязан письменно предупредить работника о предстоящем увольнении в связи с сокращением штата?",
+    "target_articles": ["88", "184"],
+    "category": "specific_search",
+    "expected_answer_keywords": ["за два месяца", "2 месяца"],
+    "is_answerable": true
+  },
+  {
+    "id": 17,
+    "question": "Как оформляется и сколько длится больничный лист работника?",
+    "target_articles": ["123"],
+    "category": "synonym_slang",
+    "expected_answer_keywords": ["медицинский отпуск", "медицинского документа"],
+    "is_answerable": true
+  },
+  {
+    "id": 18,
+    "question": "Сколько составляет обязательная отработка при уходе с работы по собственному желанию?",
+    "target_articles": ["85"],
+    "category": "synonym_slang",
+    "expected_answer_keywords": ["14", "календарных дней", "отставка"],
+    "is_answerable": true
+  },
+  {
+    "id": 19,
+    "question": "Кому и какой длительности положен декретный отпуск по рождению ребенка?",
+    "target_articles": ["124"],
+    "category": "synonym_slang",
+    "expected_answer_keywords": ["по беременности и родам", "126", "календарных дней"],
+    "is_answerable": true
+  },
+  {
+    "id": 20,
+    "question": "Может ли отец новорожденного ребенка взять оплачиваемый отпуск по уходу за ребенком в первые дни после родов?",
+    "target_articles": ["124^1"],
+    "category": "synonym_slang",
+    "expected_answer_keywords": ["отпуск по отцовству", "14 календарных дней"],
+    "is_answerable": true
+  },
+  {
+    "id": 21,
+    "question": "Каковы условия прохождения испыталки для нового сотрудника на предприятии?",
+    "target_articles": ["60"],
+    "category": "synonym_slang",
+    "expected_answer_keywords": ["испытательный срок", "3 месяца"],
+    "is_answerable": true
+  },
+  {
+    "id": 22,
+    "question": "Как оплачиваются ночные смены по сравнению с обычной дневной работой?",
+    "target_articles": ["103", "159"],
+    "category": "synonym_slang",
+    "expected_answer_keywords": ["ночное время", "повышенная оплата", "доплата"],
+    "is_answerable": true
+  },
+  {
+    "id": 23,
+    "question": "Какие выплаты и выходные пособия положены работнику при увольнении в связи с ликвидацией предприятия или сокращением штата?",
+    "target_articles": ["88", "186"],
+    "category": "multi_context",
+    "expected_answer_keywords": ["выходное пособие", "среднемесячной заработной платы", "сокращение"],
+    "is_answerable": true
+  },
+  {
+    "id": 24,
+    "question": "Как компенсируется работа в нерабочие праздничные и выходные дни?",
+    "target_articles": ["111", "158"],
+    "category": "multi_context",
+    "expected_answer_keywords": ["двойном размере", "день отдыха", "праздничные"],
+    "is_answerable": true
+  },
+  {
+    "id": 25,
+    "question": "Каков порядок применения дисциплинарного взыскания и затребования письменного объяснения от работника?",
+    "target_articles": ["208", "209"],
+    "category": "multi_context",
+    "expected_answer_keywords": ["письменное объяснение", "приказ", "срок"],
+    "is_answerable": true
+  },
+  {
+    "id": 26,
+    "question": "Каковы условия предоставления отпуска по беременности и родам и частично оплачиваемого отпуска по уходу за ребенком до трех лет?",
+    "target_articles": ["124", "126"],
+    "category": "multi_context",
+    "expected_answer_keywords": ["беременности и родам", "уходу за ребенком", "три года"],
+    "is_answerable": true
+  },
+  {
+    "id": 27,
+    "question": "Какова ставка налога на добавленную стоимость (НДС) для импорта товаров в Молдову?",
+    "target_articles": [],
+    "category": "unanswerable",
+    "expected_answer_keywords": [],
+    "is_answerable": false
+  },
+  {
+    "id": 28,
+    "question": "Какие документы необходимы для регистрации общества с ограниченной ответственностью (ООО) в Агентстве государственных услуг Молдовы?",
+    "target_articles": [],
+    "category": "unanswerable",
+    "expected_answer_keywords": [],
+    "is_answerable": false
+  },
+  {
+    "id": 29,
+    "question": "Какое уголовное наказание предусмотрено Уголовным кодексом РМ за кражу в особо крупных размерах?",
+    "target_articles": [],
+    "category": "unanswerable",
+    "expected_answer_keywords": [],
+    "is_answerable": false
+  },
+  {
+    "id": 30,
+    "question": "Какой рецепт традиционной молдавской зама с курицей и домашней лапшой?",
+    "target_articles": [],
+    "category": "unanswerable",
+    "expected_answer_keywords": [],
+    "is_answerable": false
+  }
+]

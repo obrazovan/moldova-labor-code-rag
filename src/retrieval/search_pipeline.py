@@ -86,6 +86,7 @@ class SearchPipeline:
         query: str,
         top_k: int | None = None,
         top_n: int | None = None,
+        similarity_threshold: float | None = None,
         verbose: bool = True,
     ) -> dict[str, Any]:
         """
@@ -99,6 +100,7 @@ class SearchPipeline:
         :param query: Поисковый запрос.
         :param top_k: Число кандидатов первичного поиска (если None, из конфига).
         :param top_n: Число финальных документов после реранкинга (если None, из конфига).
+        :param similarity_threshold: Порог сходства (если None, берется из конфига).
         :param verbose: Выводить ли диагностические логи в stdout/логгер.
         :return: Словарь с результатами всех этапов.
         """
@@ -122,7 +124,12 @@ class SearchPipeline:
                 print(f"  #{idx:02d}: Статья {art_num} «{title}» (Similarity: {sim:.4f})")
 
         # 2. Фильтрация контекста
-        filtered_candidates = self.filter.apply_all(raw_candidates, config=self.config)
+        filter_cfg = self.config
+        if similarity_threshold is not None:
+            filter_cfg = dict(self.config)
+            filter_cfg["similarity_threshold"] = similarity_threshold
+
+        filtered_candidates = self.filter.apply_all(raw_candidates, config=filter_cfg)
         count_filtered = len(filtered_candidates)
 
         # 3. Переранжирование (Cross-Encoder / FlashRank / Dense Fallback)
