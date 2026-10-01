@@ -179,13 +179,13 @@ class RAGService:
         }
 
 
-def run_demonstration() -> None:
+def run_demonstration(service: RAGService | None = None) -> None:
     """
     Запуск проверочных тестов сквозного RAG:
     Тест 1 (Полноценный вопрос): 'Какова продолжительность ежегодного оплачиваемого отпуска?'
     Тест 2 (Проверка на галлюцинацию): 'Как зарегистрировать космический корабль в реестре Молдовы?'
     """
-    service = RAGService()
+    service = service or RAGService()
 
     divider = "=" * 80
     sub_divider = "-" * 80
@@ -251,36 +251,45 @@ def run_interactive(service: RAGService | None = None) -> None:
     print("Для завершения работы введите 'exit', 'quit' или 'q'.")
     print(divider + "\n")
 
-    while True:
-        try:
-            query = input("\nВаш вопрос > ").strip()
-            if not query:
-                continue
-            if query.lower() in ("exit", "quit", "q", "выход"):
+    try:
+        while True:
+            try:
+                query = input("\nВаш вопрос > ").strip()
+                if not query:
+                    continue
+                if query.lower() in ("exit", "quit", "q", "выход"):
+                    print("\nСессия завершена.")
+                    break
+
+                res = service.answer(query=query)
+
+                print("\n" + sub_divider)
+                print(f"[ОТВЕТ LLM] (время: {res['total_latency_sec']:.2f} сек, фрагментов в контексте: {len(res['retrieved_docs'])}):")
+                print(sub_divider)
+                print(res["answer"])
+
+                print("\n[ИСТОЧНИКИ]:")
+                if res["sources"]:
+                    for s in res["sources"]:
+                        print(f"  • {s}")
+                else:
+                    print("  (Источники не найдены или информации недостаточно)")
+
+                if res.get("metrics_badge"):
+                    print("\n" + res["metrics_badge"])
+                print(sub_divider)
+
+            except (KeyboardInterrupt, EOFError):
                 print("\nСессия завершена.")
                 break
-
-            res = service.answer(query=query)
-
-            print("\n" + sub_divider)
-            print(f"[ОТВЕТ LLM] (время: {res['total_latency_sec']:.2f} сек, фрагментов в контексте: {len(res['retrieved_docs'])}):")
-            print(sub_divider)
-            print(res["answer"])
-
-            print("\n[ИСТОЧНИКИ]:")
-            if res["sources"]:
-                for s in res["sources"]:
-                    print(f"  • {s}")
-            else:
-                print("  (Источники не найдены или информации недостаточно)")
-
-            if res.get("metrics_badge"):
-                print("\n" + res["metrics_badge"])
-            print(sub_divider)
-
-        except (KeyboardInterrupt, EOFError):
-            print("\nСессия завершена.")
-            break
+    finally:
+        # Корректное закрытие клиента Langfuse при выходе из интерактивного режима
+        if hasattr(service, "telemetry") and service.telemetry:
+            if hasattr(service.telemetry, "langfuse") and service.telemetry.langfuse:
+                try:
+                    service.telemetry.langfuse.shutdown()
+                except Exception as exc:
+                    logger.debug(f"Ошибка при вызове telemetry.langfuse.shutdown(): {exc}")
 
 
 if __name__ == "__main__":
@@ -305,27 +314,36 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    if args.interactive:
-        run_interactive()
-    elif args.query:
-        service = RAGService()
-        res = service.answer(args.query)
-        print("\n" + "=" * 80)
-        print(f"ВОПРОС: {res['query']}")
-        print("=" * 80)
-        print("\n[ОТВЕТ LLM]:")
-        print(res["answer"])
-        print("\n[ИСТОЧНИКИ]:")
-        if res["sources"]:
-            for s in res["sources"]:
-                print(f"  • {s}")
+    service = RAGService()
+    try:
+        if args.interactive:
+            run_interactive(service=service)
+        elif args.query:
+            res = service.answer(args.query)
+            print("\n" + "=" * 80)
+            print(f"ВОПРОС: {res['query']}")
+            print("=" * 80)
+            print("\n[ОТВЕТ LLM]:")
+            print(res["answer"])
+            print("\n[ИСТОЧНИКИ]:")
+            if res["sources"]:
+                for s in res["sources"]:
+                    print(f"  • {s}")
+            else:
+                print("  (Источники не указаны или информации недостаточно)")
+            if res.get("metrics_badge"):
+                print("\n" + res["metrics_badge"])
+            print("=" * 80 + "\n")
         else:
-            print("  (Источники не указаны или информации недостаточно)")
-        if res.get("metrics_badge"):
-            print("\n" + res["metrics_badge"])
-        print("=" * 80 + "\n")
-    else:
-        run_demonstration()
-        print("\nПодсказка:")
-        print("  • Чтобы задать свой вопрос:        python -m src.generation.rag_service --query \"Ваш вопрос\"")
-        print("  • Чтобы открыть интерактивный чат: python -m src.generation.rag_service -i\n")
+            run_demonstration(service=service)
+            print("\nПодсказка:")
+            print("  • Чтобы задать свой вопрос:        python -m src.generation.rag_service --query \"Ваш вопрос\"")
+            print("  • Чтобы открыть интерактивный чат: python -m src.generation.rag_service -i\n")
+    finally:
+        # Корректное закрытие клиента Langfuse при выходе из консольного режима
+        if hasattr(service, "telemetry") and service.telemetry:
+            if hasattr(service.telemetry, "langfuse") and service.telemetry.langfuse:
+                try:
+                    service.telemetry.langfuse.shutdown()
+                except Exception as exc:
+                    logger.debug(f"Ошибка при вызове telemetry.langfuse.shutdown(): {exc}")

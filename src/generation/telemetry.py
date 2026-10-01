@@ -25,6 +25,19 @@ if sys.platform == "win32":
 logger = logging.getLogger(__name__)
 
 
+class _NoOpLangfuse:
+    """Заглушка для безопасного вызова методов Langfuse в No-Op режиме без исключений."""
+
+    def flush(self) -> None:
+        pass
+
+    def shutdown(self) -> None:
+        pass
+
+    def get_trace_url(self, *args: Any, **kwargs: Any) -> str | None:
+        return None
+
+
 class TelemetryTracker:
     """
     Класс для наблюдаемости RAG: трассировка в Langfuse,
@@ -60,6 +73,7 @@ class TelemetryTracker:
 
         self.is_active = False
         self.client = None
+        self.langfuse: Any = _NoOpLangfuse()
 
         # Проверка валидности ключей (отсекаем плейсхолдеры и пустые значения)
         if (
@@ -78,6 +92,7 @@ class TelemetryTracker:
                     secret_key=self.secret_key,
                     host=self.host,
                 )
+                self.langfuse = self.client
                 self.is_active = True
                 logger.info(f"Langfuse успешно подключен (host: {self.host})")
             except Exception as exc:
@@ -87,10 +102,12 @@ class TelemetryTracker:
                 )
                 self.is_active = False
                 self.client = None
+                self.langfuse = _NoOpLangfuse()
         else:
             logger.info(
                 "Ключи Langfuse не настроены в .env. TelemetryTracker работает в тихом локальном режиме (No-Op)."
             )
+            self.langfuse = _NoOpLangfuse()
 
     def estimate_cost(
         self,
@@ -226,15 +243,19 @@ class TelemetryTracker:
                 # 5. Получение ссылки на трейс
                 if trace_id:
                     try:
-                        trace_url = self.client.get_trace_url(trace_id=trace_id)
+                        trace_url = self.langfuse.get_trace_url(trace_id=trace_id)
                     except Exception:
+                        trace_url = None
+                    if not trace_url:
                         trace_url = f"{self.host.rstrip('/')}/trace/{trace_id}"
 
-                # Отправка событий
-                try:
-                    self.client.flush()
-                except Exception:
-                    pass
+                # Принудительный сброс буфера перед выходом из метода,
+                # чтобы фоновый поток успевал отправить телеметрию в cloud.langfuse.com
+                if self.langfuse is not None:
+                    try:
+                        self.langfuse.flush()
+                    except Exception as e:
+                        logger.warning(f"Ошибка при вызове self.langfuse.flush(): {e}")
 
             except Exception as e:
                 logger.warning(f"Ошибка при отправке трейса в Langfuse: {e}")
@@ -259,6 +280,22 @@ class TelemetryTracker:
             "estimated_cost_usd": cost,
             "model_name": effective_model,
         }
+
+    def flush(self) -> None:
+        """Принудительный сброс буфера событий в Langfuse."""
+        if self.langfuse is not None:
+            try:
+                self.langfuse.flush()
+            except Exception as e:
+                logger.warning(f"Ошибка при вызове self.langfuse.flush(): {e}")
+
+    def shutdown(self) -> None:
+        """Корректное закрытие клиента Langfuse с гарантированной отправкой телеметрии."""
+        if self.langfuse is not None:
+            try:
+                self.langfuse.shutdown()
+            except Exception as e:
+                logger.warning(f"Ошибка при вызове self.langfuse.shutdown(): {e}")
 
     def format_metrics_badge(self, metrics: dict[str, Any]) -> str:
         """
