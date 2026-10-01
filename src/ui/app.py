@@ -24,21 +24,6 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-# Заглушка для torchvision, чтобы Streamlit watcher не падал при инспекции transformers
-if "torchvision" not in sys.modules:
-    try:
-        import torchvision
-    except ImportError:
-        tv = types.ModuleType("torchvision")
-        tv.transforms = types.ModuleType("torchvision.transforms")
-        tv.transforms.v2 = types.ModuleType("torchvision.transforms.v2")
-        tv.transforms.v2.functional = types.ModuleType("torchvision.transforms.v2.functional")
-        tv.io = types.ModuleType("torchvision.io")
-        sys.modules["torchvision"] = tv
-        sys.modules["torchvision.transforms"] = tv.transforms
-        sys.modules["torchvision.transforms.v2"] = tv.transforms.v2
-        sys.modules["torchvision.transforms.v2.functional"] = tv.transforms.v2.functional
-        sys.modules["torchvision.io"] = tv.io
 
 # Добавляем корень проекта в sys.path для корректных импортов
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
