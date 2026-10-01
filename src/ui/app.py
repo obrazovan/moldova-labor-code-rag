@@ -8,8 +8,13 @@ from __future__ import annotations
 import os
 import sys
 import time
+import types
 from pathlib import Path
 from typing import Any
+
+# Подавление фоновых предупреждений
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Настройка UTF-8 вывода для Windows
 if sys.platform == "win32":
@@ -18,6 +23,22 @@ if sys.platform == "win32":
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+
+# Заглушка для torchvision, чтобы Streamlit watcher не падал при инспекции transformers
+if "torchvision" not in sys.modules:
+    try:
+        import torchvision
+    except ImportError:
+        tv = types.ModuleType("torchvision")
+        tv.transforms = types.ModuleType("torchvision.transforms")
+        tv.transforms.v2 = types.ModuleType("torchvision.transforms.v2")
+        tv.transforms.v2.functional = types.ModuleType("torchvision.transforms.v2.functional")
+        tv.io = types.ModuleType("torchvision.io")
+        sys.modules["torchvision"] = tv
+        sys.modules["torchvision.transforms"] = tv.transforms
+        sys.modules["torchvision.transforms.v2"] = tv.transforms.v2
+        sys.modules["torchvision.transforms.v2.functional"] = tv.transforms.v2.functional
+        sys.modules["torchvision.io"] = tv.io
 
 # Добавляем корень проекта в sys.path для корректных импортов
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -204,12 +225,35 @@ def main() -> None:
             help="Использовать кэш SQLite для быстрого ответа на синонимичные вопросы",
         )
 
+        # 7. Слайдер порога семантического кэша
+        cache_threshold = st.slider(
+            "Порог сходства кэша (Cache Threshold)",
+            min_value=0.90,
+            max_value=0.99,
+            value=0.94,
+            step=0.01,
+            disabled=not use_cache,
+            help="Порог косинусного сходства для Cache Hit с верификацией интента вопроса",
+        )
+
         st.divider()
 
-        # Кнопка очистки истории
-        if st.button("🗑️ Очистить диалог", use_container_width=True, type="secondary"):
-            st.session_state.messages = []
-            st.rerun()
+        # Кнопки очистки диалога и кэша
+        col_clr1, col_clr2 = st.columns(2)
+        with col_clr1:
+            if st.button("🗑️ Чат", use_container_width=True, help="Очистить историю сообщений"):
+                st.session_state.messages = []
+                st.rerun()
+        with col_clr2:
+            if st.button("🧹 Кэш", use_container_width=True, help="Очистить базу SQLite семантического кэша"):
+                try:
+                    service_inst = get_rag_service(embedding_model)
+                    if service_inst and service_inst.cache:
+                        service_inst.cache.clear()
+                        st.toast("База семантического кэша SQLite очищена!", icon="🧹")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Ошибка очистки кэша: {e}")
 
         st.markdown("### 📊 Статус системы")
 
@@ -333,6 +377,7 @@ def main() -> None:
                     similarity_threshold=similarity_threshold,
                     use_reranker=use_reranker,
                     use_cache=use_cache,
+                    cache_threshold=cache_threshold,
                 )
 
                 elapsed_ui_sec = time.perf_counter() - t_ui_start

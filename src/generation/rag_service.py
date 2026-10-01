@@ -129,6 +129,7 @@ class RAGService:
         similarity_threshold: float | None = None,
         use_reranker: bool = True,
         use_cache: bool = True,
+        cache_threshold: float | None = None,
     ) -> dict[str, Any]:
         """
         Сквозное выполнение запроса с интеграцией Guardrail и Semantic Cache:
@@ -209,7 +210,11 @@ class RAGService:
         t_cache_start = time.perf_counter()
         cached_result = None
         if use_cache and query_embedding is not None and self.cache.enabled:
-            cached_result = self.cache.get(query_embedding=query_embedding)
+            cached_result = self.cache.get(
+                query_embedding=query_embedding,
+                query_text=clean_query,
+                similarity_threshold=cache_threshold,
+            )
         cache_latency_sec = time.perf_counter() - t_cache_start
 
         if cached_result is not None:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -27,7 +28,8 @@ class SemanticCache:
     """
     Семантический кэш вопросно-ответных пар на базе SQLite.
     Хранит векторные представления запросов и возвращает готовый ответ,
-    если косинусное сходство нового вопроса превышает заданный порог.
+    если косинусное сходство нового вопроса превышает заданный порог
+    и совпадает функциональный интент вопроса (Intent-Aware Matching).
     """
 
     def __init__(
@@ -41,7 +43,7 @@ class SemanticCache:
 
         :param config_path: Путь к файлу configs/guardrails_cache.json.
         :param db_path: Путь к файлу БД SQLite (переопределяет конфиг).
-        :param similarity_threshold: Порог косинусного сходства (переопределяет конфиг, дефолт 0.92).
+        :param similarity_threshold: Порог косинусного сходства (переопределяет конфиг, дефолт 0.94).
         """
         self.config_path = Path(config_path) if config_path else DEFAULT_CONFIG_PATH
         self.config = self._load_config(self.config_path)
@@ -51,7 +53,7 @@ class SemanticCache:
         self.similarity_threshold: float = float(
             similarity_threshold
             if similarity_threshold is not None
-            else cache_cfg.get("similarity_threshold", 0.92)
+            else cache_cfg.get("similarity_threshold", 0.94)
         )
 
         cfg_db_path = db_path or cache_cfg.get("db_path", "data/cache/semantic_cache.db")
@@ -63,6 +65,67 @@ class SemanticCache:
 
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
+
+    @staticmethod
+    def extract_query_intent(query: str | None) -> str:
+        """
+        Определяет функциональную интенцию (категорию) вопроса:
+        - 'binary_fact': проверка факта / гарантии (Да/Нет, 'ли', 'можно ли', 'обязан ли')
+        - 'quantity': размер, сумма, процент, длительность ('сколько', 'какой размер', 'какая оплата', 'какова продолжительность')
+        - 'procedure': порядок действий, процедура ('как', 'каким образом', 'в каком порядке')
+        - 'temporal': временные рамки ('когда', 'в какой срок')
+        - 'cause': основания, причины ('почему', 'на каких основаниях', 'в каких случаях')
+        - 'subject': круг лиц ('кто', 'кому', 'какие категории')
+        - 'general': общий вопрос
+        """
+        if not query:
+            return "general"
+        ql = query.lower().strip()
+        words = set(re.findall(r"\b\w+\b", ql))
+
+        # 1. Бинарный факт (Да / Нет / Гарантия)
+        if "ли" in words or any(
+            ql.startswith(p)
+            for p in (
+                "можно ли", "вправе ли", "обязан ли", "должен ли", "является ли",
+                "оплачивается ли", "положен ли", "предусмотрен ли", "разрешено ли"
+            )
+        ):
+            return "binary_fact"
+
+        # 2. Количество / Размер / Длительность
+        if any(
+            w in words
+            for w in (
+                "сколько", "размер", "размере", "продолжительность",
+                "длительность", "длится", "сумма", "сумме", "процент", "ставка"
+            )
+        ) or any(
+            p in ql
+            for p in (
+                "сколько", "какой размер", "в каком размере", "какая сумма",
+                "какая оплата", "какова продолжительность", "сколько дней", "сколько платят"
+            )
+        ):
+            return "quantity"
+
+        # 3. Процедура / Порядок
+        if any(w in words for w in ("как", "каким", "порядке", "порядок", "процедура", "образом")):
+            return "procedure"
+
+        # 4. Сроки
+        if any(w in words for w in ("когда", "сроки", "срок")) and "сколько" not in ql:
+            return "temporal"
+
+        # 5. Основания / Причины
+        if any(w in words for w in ("почему", "зачем", "основания", "основании", "случаях", "случае", "причинам")):
+            return "cause"
+
+        # 6. Субъекты
+        if any(w in words for w in ("кто", "кому", "кого", "категории", "работники")):
+            return "subject"
+
+        return "general"
 
     @staticmethod
     def _load_config(path: Path) -> dict[str, Any]:
@@ -100,17 +163,27 @@ class SemanticCache:
     def get(
         self,
         query_embedding: list[float] | np.ndarray,
+        query_text: str | None = None,
+        similarity_threshold: float | None = None,
     ) -> dict[str, Any] | None:
         """
-        Поиск наиболее близкого ответа в кэше по векторному сходству.
+        Поиск наиболее близкого ответа в кэше по векторному сходству с проверкой совместимости интентов.
 
         :param query_embedding: L2-нормализованный эмбеддинг запроса.
+        :param query_text: Текст исходного вопроса для верификации интента.
+        :param similarity_threshold: Порог сходства (если передан, переопределяет дефолтный).
         :return: Словарь с кэшированным ответом и метаданными, либо None при cache miss.
         """
         if not self.enabled or query_embedding is None:
             return None
 
         q_vec = np.array(query_embedding, dtype=np.float32)
+        effective_threshold = (
+            similarity_threshold
+            if similarity_threshold is not None
+            else self.similarity_threshold
+        )
+        incoming_intent = self.extract_query_intent(query_text) if query_text else "general"
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -129,10 +202,24 @@ class SemanticCache:
                 cached_vec = np.frombuffer(row[2], dtype=np.float32)
                 sim = float(np.dot(q_vec, cached_vec))
                 if sim > best_sim:
+                    # Проверяем совместимость интентов
+                    cached_q = row[1]
+                    cached_intent = self.extract_query_intent(cached_q)
+                    if (
+                        incoming_intent != "general"
+                        and cached_intent != "general"
+                        and incoming_intent != cached_intent
+                    ):
+                        logger.debug(
+                            f"Semantic Cache: пропуск кандидата из-за несовпадения интентов: "
+                            f"'{query_text}' [{incoming_intent}] vs '{cached_q}' [{cached_intent}] (sim={sim:.4f})"
+                        )
+                        continue
+
                     best_sim = sim
                     best_row = row
 
-            if best_row is not None and best_sim >= self.similarity_threshold:
+            if best_row is not None and best_sim >= effective_threshold:
                 row_id = best_row[0]
                 matched_query = best_row[1]
                 response_text = best_row[3]
@@ -147,7 +234,7 @@ class SemanticCache:
                 conn.commit()
 
                 logger.info(
-                    f"Semantic Cache HIT: similarity={best_sim:.4f} >= {self.similarity_threshold:.2f} "
+                    f"Semantic Cache HIT: similarity={best_sim:.4f} >= {effective_threshold:.2f} "
                     f"(Matched: '{matched_query}', hits={current_hits})"
                 )
 
@@ -161,7 +248,7 @@ class SemanticCache:
                 }
 
         logger.debug(
-            f"Semantic Cache MISS: максимальное сходство {best_sim:.4f} < {self.similarity_threshold:.2f}"
+            f"Semantic Cache MISS: максимальное сходство {best_sim:.4f} < {effective_threshold:.2f}"
         )
         return None
 

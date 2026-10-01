@@ -37,7 +37,7 @@
   },
   "cache": {
     "enabled": true,
-    "similarity_threshold": 0.92,
+    "similarity_threshold": 0.94,
     "db_path": "data/cache/semantic_cache.db"
   }
 }
