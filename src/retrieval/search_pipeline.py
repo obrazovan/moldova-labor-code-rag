@@ -87,6 +87,7 @@ class SearchPipeline:
         top_k: int | None = None,
         top_n: int | None = None,
         similarity_threshold: float | None = None,
+        use_reranker: bool = True,
         verbose: bool = True,
     ) -> dict[str, Any]:
         """
@@ -101,13 +102,14 @@ class SearchPipeline:
         :param top_k: Число кандидатов первичного поиска (если None, из конфига).
         :param top_n: Число финальных документов после реранкинга (если None, из конфига).
         :param similarity_threshold: Порог сходства (если None, берется из конфига).
+        :param use_reranker: Использовать ли Cross-Encoder/FlashRank реранкер (по умолчанию True).
         :param verbose: Выводить ли диагностические логи в stdout/логгер.
         :return: Словарь с результатами всех этапов.
         """
         k = top_k if top_k is not None else self.retriever_top_k
         n = top_n if top_n is not None else self.reranker_top_n
 
-        logger.info(f"Запуск поиска по запросу: '{query}' (top_k={k}, top_n={n})")
+        logger.info(f"Запуск поиска по запросу: '{query}' (top_k={k}, top_n={n}, reranker={use_reranker})")
 
         # 1. Первичный векторный поиск из ChromaDB
         raw_candidates = self.retriever.retrieve(query=query, top_k=k)
@@ -133,16 +135,23 @@ class SearchPipeline:
         count_filtered = len(filtered_candidates)
 
         # 3. Переранжирование (Cross-Encoder / FlashRank / Dense Fallback)
-        final_documents = self.reranker.rerank(
-            query=query,
-            documents=filtered_candidates,
-            top_n=n,
-        )
+        if use_reranker:
+            final_documents = self.reranker.rerank(
+                query=query,
+                documents=filtered_candidates,
+                top_n=n,
+            )
+        else:
+            final_documents = filtered_candidates[:n]
+            for doc in final_documents:
+                if "rerank_score" not in doc:
+                    doc["rerank_score"] = doc.get("similarity_score", 0.0)
         count_final = len(final_documents)
 
         # Диагностический вывод финальной выдачи после реранкера
         if verbose:
-            print(f"\n[ДИАГНОСТИКА] Отобрано реранкером ({self.reranker.mode}) (Top-{count_final} статей):")
+            mode_str = self.reranker.mode if use_reranker else "bypass (dense similarity)"
+            print(f"\n[ДИАГНОСТИКА] Отобрано реранкером ({mode_str}) (Top-{count_final} статей):")
             for idx, doc in enumerate(final_documents, 1):
                 meta = doc.get("metadata", {})
                 art_num = meta.get("article_number", "—")

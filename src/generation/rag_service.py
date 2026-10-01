@@ -121,18 +121,31 @@ class RAGService:
 
         return sources
 
-    def answer(self, query: str) -> dict[str, Any]:
+    def answer(
+        self,
+        query: str,
+        top_k: int | None = None,
+        top_n: int | None = None,
+        similarity_threshold: float | None = None,
+        use_reranker: bool = True,
+        use_cache: bool = True,
+    ) -> dict[str, Any]:
         """
         Сквозное выполнение запроса с интеграцией Guardrail и Semantic Cache:
-        1. Вычисление эмбеддинга запроса (query_embedding).
-        2. Guardrail Check: проверка на Prompt Injection и принадлежность к трудовому кодексу.
+        1. Guardrail Check: проверка на Prompt Injection и принадлежность к трудовому кодексу.
            При отклонении — мгновенный возврат с тегом 'guardrail_block' (Latency < 10 мс, Cost = $0.00).
+        2. Вычисление эмбеддинга запроса (query_embedding).
         3. Semantic Cache Lookup: поиск схожего ответа в SQLite базе (cosine similarity >= 0.92).
            При попадании — возврат кэшированного ответа с тегом 'cache_hit' (Latency ~ 5 мс, Cost = $0.00).
-        4. Cache Miss: стандартный поиск и реранкинг (SearchPipeline), генерация (GeminiClient),
+        4. Cache Miss: динамический поиск и реранкинг (SearchPipeline), генерация (GeminiClient),
            сохранение пары в кэш и логирование с тегом 'cache_miss'.
 
         :param query: Вопрос пользователя.
+        :param top_k: Количество первичных кандидатов векторного поиска (ChromaDB).
+        :param top_n: Количество финальных статей после фильтра/реранкера.
+        :param similarity_threshold: Минимальный порог сходства для фильтрации.
+        :param use_reranker: Включить Cross-Encoder / FlashRank переранжирование.
+        :param use_cache: Использовать ли семантический кэш SQLite.
         :return: Словарь с ключами:
                  - 'query': текст вопроса
                  - 'answer': сгенерированный или кэшированный ответ
@@ -141,6 +154,8 @@ class RAGService:
                  - 'metrics': метрики выполнения (задержки, токены, стоимость, трейс)
                  - 'metrics_badge': отформатированная строка для вывода в CLI
                  - 'status': guardrail_block | cache_hit | cache_miss
+                 - 'raw_retrieved': первичные кандидаты из ChromaDB
+                 - 'filtered_docs': кандидаты после порога фильтрации
         """
         clean_query = query.strip()
         logger.info(f"Обработка запроса пользователя: '{clean_query}'")
@@ -181,6 +196,8 @@ class RAGService:
                 "llm_latency_sec": 0.0,
                 "total_latency_sec": total_latency_sec,
                 "status": "guardrail_block",
+                "raw_retrieved": [],
+                "filtered_docs": [],
             }
 
         # 2. Вычисление эмбеддинга запроса (используется для Semantic Cache и векторного поиска)
@@ -191,7 +208,7 @@ class RAGService:
         # 3. Semantic Cache Lookup (Поиск семантически эквивалентных ответов)
         t_cache_start = time.perf_counter()
         cached_result = None
-        if query_embedding is not None and self.cache.enabled:
+        if use_cache and query_embedding is not None and self.cache.enabled:
             cached_result = self.cache.get(query_embedding=query_embedding)
         cache_latency_sec = time.perf_counter() - t_cache_start
 
@@ -230,11 +247,19 @@ class RAGService:
                 "llm_latency_sec": 0.0,
                 "total_latency_sec": total_latency_sec,
                 "status": "cache_hit",
+                "raw_retrieved": [],
+                "filtered_docs": [],
             }
 
         # 4. Cache Miss: Стандартный конвейер RAG (поиск, промпт, генерация)
         t_search_start = time.perf_counter()
-        search_result = self.search_pipeline.search(query=clean_query)
+        search_result = self.search_pipeline.search(
+            query=clean_query,
+            top_k=top_k,
+            top_n=top_n,
+            similarity_threshold=similarity_threshold,
+            use_reranker=use_reranker,
+        )
         search_latency_sec = time.perf_counter() - t_search_start
         search_latency_ms = search_latency_sec * 1000.0
         retrieved_docs = search_result.get("reranked", [])
@@ -258,7 +283,7 @@ class RAGService:
         sources = self._extract_sources(generated_answer, retrieved_docs)
 
         # Сохранение в Semantic Cache
-        if query_embedding is not None and self.cache.enabled:
+        if use_cache and query_embedding is not None and self.cache.enabled:
             self.cache.set(
                 query=clean_query,
                 query_embedding=query_embedding,
@@ -293,6 +318,8 @@ class RAGService:
             "llm_latency_sec": llm_latency_sec,
             "total_latency_sec": total_latency_sec,
             "status": "cache_miss",
+            "raw_retrieved": search_result.get("raw_retrieved", []),
+            "filtered_docs": search_result.get("filtered", []),
         }
 
 

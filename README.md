@@ -69,7 +69,10 @@
 │   │   └── test_guard_cache.py  # Комплексная валидация Guardrail и Semantic Cache
 │   ├── cache/                   # Семантический кэш ответов на SQLite
 │   │   └── semantic_cache.py    # Класс SemanticCache (косинусное сходство >= 0.92)
-│   └── evaluation/              # Оценка метрик
+│   ├── evaluation/              # Оценка метрик
+│   └── ui/                      # Интерактивный Web UI на Streamlit
+│       └── app.py               # Главный интерфейс приложения
+├── app.py                       # Точка запуска Streamlit Web UI (streamlit run app.py)
 ├── .env.example                 # Шаблон переменных окружения
 ├── PROJECT_SPEC.md              # Архитектурные требования и спецификация
 ├── requirements.txt             # Зависимости проекта
@@ -754,6 +757,11 @@ python experiments/run_experiments.py
 ### 11. Тестирование Guardrails и Семантического кэша
 ```bash
 python -m src.guardrails.test_guard_cache
+```
+
+### 12. Запуск интерактивного Web UI на Streamlit
+```bash
+streamlit run app.py
 ```
 
 
