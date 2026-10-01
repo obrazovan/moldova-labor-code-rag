@@ -1,0 +1,43 @@
+{
+  "guardrails": {
+    "enabled": true,
+    "injection_keywords": [
+      "ignore previous instructions",
+      "забудь все инструкции",
+      "system prompt",
+      "ты теперь",
+      "jailbreak",
+      "override"
+    ],
+    "domain_keywords": [
+      "отпуск",
+      "увольнен",
+      "работ",
+      "договор",
+      "зарплат",
+      "труд",
+      "стаж",
+      "график",
+      "больничн",
+      "нетрудоспособн",
+      "испытательн",
+      "командировк",
+      "взыскан",
+      "директор",
+      "работодател",
+      "профсоюз",
+      "перерыв",
+      "сверхурочн",
+      "выходн",
+      "праздничн",
+      "пособи",
+      "декрет"
+    ],
+    "semantic_domain_threshold": 0.40
+  },
+  "cache": {
+    "enabled": true,
+    "similarity_threshold": 0.92,
+    "db_path": "data/cache/semantic_cache.db"
+  }
+}

@@ -51,7 +51,9 @@ desktop.ini
 # Vector DB & dynamic artifacts
 chroma_db/
 models_cache/
+data/cache/
 *.sqlite3
+*.db
 
 # AI Agent & Internal IDE configs
 .antigravityrules

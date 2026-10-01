@@ -26,6 +26,8 @@ from src.retrieval.search_pipeline import SearchPipeline
 from src.generation.prompt_builder import PromptBuilder
 from src.generation.llm_client import GeminiClient
 from src.generation.telemetry import TelemetryTracker
+from src.guardrails.domain_guard import DomainGuard
+from src.cache.semantic_cache import SemanticCache
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,7 +40,8 @@ logger = logging.getLogger(__name__)
 class RAGService:
     """
     Главный сквозной сервис вопросно-ответной системы RAG.
-    Объединяет поиск (Retriever + Filter + Reranker), форматирование промпта,
+    Объединяет входной Guardrail (Domain & Injection Check), семантический кэш SQLite,
+    поиск (Retriever + Filter + Reranker), форматирование промпта,
     генерацию LLM и систему телеметрии/наблюдаемости (Langfuse Tracing).
     """
 
@@ -48,8 +51,11 @@ class RAGService:
         prompt_builder: PromptBuilder | None = None,
         llm_client: GeminiClient | None = None,
         telemetry: TelemetryTracker | None = None,
+        guard: DomainGuard | None = None,
+        cache: SemanticCache | None = None,
         retrieval_config_path: str | Path | None = None,
         generation_config_path: str | Path | None = None,
+        guardrails_config_path: str | Path | None = None,
     ) -> None:
         """
         Инициализация сквозного RAG-сервиса.
@@ -58,8 +64,11 @@ class RAGService:
         :param prompt_builder: Экземпляр строителя промптов (если None, создается новый).
         :param llm_client: Клиент Gemini (если None, инициализируется с дефолтным конфигом).
         :param telemetry: Трекер телеметрии и трассировки Langfuse.
+        :param guard: Входной Guardrail (проверка безопасности и предметной области).
+        :param cache: Семантический кэш ответов на базе SQLite.
         :param retrieval_config_path: Путь к файлу configs/retrieval.json.
         :param generation_config_path: Путь к файлу configs/generation.json.
+        :param guardrails_config_path: Путь к файлу configs/guardrails_cache.json.
         """
         logger.info("Инициализация RAGService...")
 
@@ -68,7 +77,18 @@ class RAGService:
         self.llm_client = llm_client or GeminiClient(config_path=generation_config_path)
         self.telemetry = telemetry or TelemetryTracker()
 
-        logger.info("RAGService успешно инициализирован и готов к обработке запросов.")
+        # Единый экземпляр embedder для экономии оперативной памяти
+        self.embedder = getattr(self.search_pipeline.retriever, "embedder", None)
+
+        self.guard = guard or DomainGuard(
+            config_path=guardrails_config_path,
+            embedder=self.embedder,
+        )
+        self.cache = cache or SemanticCache(
+            config_path=guardrails_config_path,
+        )
+
+        logger.info("RAGService успешно инициализирован (Guardrails & SemanticCache подключены).")
 
     def _extract_sources(self, answer: str, retrieved_docs: list[dict[str, Any]]) -> list[str]:
         """
@@ -103,41 +123,127 @@ class RAGService:
 
     def answer(self, query: str) -> dict[str, Any]:
         """
-        Сквозное выполнение запроса:
-        1. Поиск и реранкинг релевантных статей (SearchPipeline) с замером задержки.
-        2. Формирование структурированного контекста (PromptBuilder).
-        3. Генерация ответа через LLM с защитой от галлюцинаций (GeminiClient) с замером задержки.
-        4. Логирование спанов и трейсов в Langfuse, расчет токенов и стоимости (TelemetryTracker).
-        5. Формирование структуры результата, источников и плашки метрик.
+        Сквозное выполнение запроса с интеграцией Guardrail и Semantic Cache:
+        1. Вычисление эмбеддинга запроса (query_embedding).
+        2. Guardrail Check: проверка на Prompt Injection и принадлежность к трудовому кодексу.
+           При отклонении — мгновенный возврат с тегом 'guardrail_block' (Latency < 10 мс, Cost = $0.00).
+        3. Semantic Cache Lookup: поиск схожего ответа в SQLite базе (cosine similarity >= 0.92).
+           При попадании — возврат кэшированного ответа с тегом 'cache_hit' (Latency ~ 5 мс, Cost = $0.00).
+        4. Cache Miss: стандартный поиск и реранкинг (SearchPipeline), генерация (GeminiClient),
+           сохранение пары в кэш и логирование с тегом 'cache_miss'.
 
         :param query: Вопрос пользователя.
         :return: Словарь с ключами:
                  - 'query': текст вопроса
-                 - 'answer': сгенерированный LLM ответ
+                 - 'answer': сгенерированный или кэшированный ответ
                  - 'retrieved_docs': список отобранных реранкером документов
                  - 'sources': список нормативных источников
                  - 'metrics': метрики выполнения (задержки, токены, стоимость, трейс)
                  - 'metrics_badge': отформатированная строка для вывода в CLI
+                 - 'status': guardrail_block | cache_hit | cache_miss
         """
         clean_query = query.strip()
         logger.info(f"Обработка запроса пользователя: '{clean_query}'")
 
         t_total_start = time.perf_counter()
 
-        # 1. Поиск релевантных документов с точным замером времени
+        # 1. Guardrail Check (Security & Domain validation)
+        # Быстрая проверка безопасности (Prompt Injection) и лексических фильтров до тяжелых вычислений
+        t_guard_start = time.perf_counter()
+        is_safe, guard_reason = self.guard.check(clean_query, query_embedding=None)
+        guard_latency_sec = time.perf_counter() - t_guard_start
+
+        if not is_safe:
+            total_latency_sec = time.perf_counter() - t_total_start
+            total_latency_ms = total_latency_sec * 1000.0
+            logger.warning(
+                f"Guardrail блокировка запроса: '{guard_reason}' ({total_latency_ms:.2f} мс)"
+            )
+            telemetry_metrics = self.telemetry.log_rag_execution(
+                query=clean_query,
+                retrieved_docs=[],
+                final_answer=guard_reason,
+                search_latency_ms=0.0,
+                llm_latency_ms=0.0,
+                status="guardrail_block",
+                tags=["guardrail_block"],
+                total_latency_ms=total_latency_ms,
+            )
+            metrics_badge = self.telemetry.format_metrics_badge(telemetry_metrics)
+            return {
+                "query": clean_query,
+                "answer": guard_reason,
+                "retrieved_docs": [],
+                "sources": [],
+                "metrics": telemetry_metrics,
+                "metrics_badge": metrics_badge,
+                "search_latency_sec": 0.0,
+                "llm_latency_sec": 0.0,
+                "total_latency_sec": total_latency_sec,
+                "status": "guardrail_block",
+            }
+
+        # 2. Вычисление эмбеддинга запроса (используется для Semantic Cache и векторного поиска)
+        query_embedding: list[float] | None = None
+        if self.embedder is not None:
+            query_embedding = self.embedder.encode_query(clean_query)
+
+        # 3. Semantic Cache Lookup (Поиск семантически эквивалентных ответов)
+        t_cache_start = time.perf_counter()
+        cached_result = None
+        if query_embedding is not None and self.cache.enabled:
+            cached_result = self.cache.get(query_embedding=query_embedding)
+        cache_latency_sec = time.perf_counter() - t_cache_start
+
+        if cached_result is not None:
+            total_latency_sec = time.perf_counter() - t_total_start
+            total_latency_ms = total_latency_sec * 1000.0
+            logger.info(
+                f"Semantic Cache HIT: сходство={cached_result.get('similarity')} "
+                f"({total_latency_ms:.2f} мс)"
+            )
+            telemetry_metrics = self.telemetry.log_rag_execution(
+                query=clean_query,
+                retrieved_docs=[],
+                final_answer=cached_result["response_text"],
+                search_latency_ms=0.0,
+                llm_latency_ms=0.0,
+                status="cache_hit",
+                tags=["cache_hit"],
+                extra_metadata={
+                    "similarity": cached_result.get("similarity"),
+                    "matched_query": cached_result.get("matched_query"),
+                    "hit_count": cached_result.get("hit_count"),
+                    "cache_id": cached_result.get("cache_id"),
+                },
+                total_latency_ms=total_latency_ms,
+            )
+            metrics_badge = self.telemetry.format_metrics_badge(telemetry_metrics)
+            return {
+                "query": clean_query,
+                "answer": cached_result["response_text"],
+                "retrieved_docs": [],
+                "sources": cached_result.get("sources", []),
+                "metrics": telemetry_metrics,
+                "metrics_badge": metrics_badge,
+                "search_latency_sec": 0.0,
+                "llm_latency_sec": 0.0,
+                "total_latency_sec": total_latency_sec,
+                "status": "cache_hit",
+            }
+
+        # 4. Cache Miss: Стандартный конвейер RAG (поиск, промпт, генерация)
         t_search_start = time.perf_counter()
         search_result = self.search_pipeline.search(query=clean_query)
         search_latency_sec = time.perf_counter() - t_search_start
         search_latency_ms = search_latency_sec * 1000.0
         retrieved_docs = search_result.get("reranked", [])
 
-        # 2. Формирование промпта с контекстом
         user_message = self.prompt_builder.build_user_message(
             query=clean_query,
             documents=retrieved_docs,
         )
 
-        # 3. Вызов Gemini LLM с точным замером времени
         t_llm_start = time.perf_counter()
         gen_result = self.llm_client.generate(prompt=user_message)
         llm_latency_sec = time.perf_counter() - t_llm_start
@@ -149,10 +255,17 @@ class RAGService:
         total_latency_sec = time.perf_counter() - t_total_start
         total_latency_ms = total_latency_sec * 1000.0
 
-        # 4. Извлечение источников
         sources = self._extract_sources(generated_answer, retrieved_docs)
 
-        # 5. Трассировка в Langfuse и формирование сводки метрик
+        # Сохранение в Semantic Cache
+        if query_embedding is not None and self.cache.enabled:
+            self.cache.set(
+                query=clean_query,
+                query_embedding=query_embedding,
+                response=generated_answer,
+                sources=sources,
+            )
+
         telemetry_metrics = self.telemetry.log_rag_execution(
             query=clean_query,
             retrieved_docs=retrieved_docs,
@@ -163,6 +276,9 @@ class RAGService:
             system_prompt=self.llm_client.system_prompt,
             context_text=user_message,
             model_name=getattr(gen_result, "model_name", self.llm_client.model_name),
+            status="cache_miss",
+            tags=["cache_miss"],
+            total_latency_ms=total_latency_ms,
         )
         metrics_badge = self.telemetry.format_metrics_badge(telemetry_metrics)
 
@@ -176,6 +292,7 @@ class RAGService:
             "search_latency_sec": search_latency_sec,
             "llm_latency_sec": llm_latency_sec,
             "total_latency_sec": total_latency_sec,
+            "status": "cache_miss",
         }
 
 

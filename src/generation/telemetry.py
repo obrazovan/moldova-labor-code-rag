@@ -148,20 +148,14 @@ class TelemetryTracker:
         system_prompt: str | None = None,
         context_text: str | None = None,
         model_name: str | None = None,
+        status: str = "cache_miss",
+        tags: list[str] | None = None,
+        extra_metadata: dict[str, Any] | None = None,
+        total_latency_ms: float | None = None,
     ) -> dict[str, Any]:
         """
-        Логирование полного выполнения RAG в Langfuse со вложенными спанами retrieval и generation.
-
-        :param query: Исходный вопрос пользователя.
-        :param retrieved_docs: Документы, извлеченные поисковым пайплайном.
-        :param final_answer: Итоговый сгенерированный ответ LLM.
-        :param search_latency_ms: Время поиска в миллисекундах.
-        :param llm_latency_ms: Время генерации ответа в миллисекундах.
-        :param usage_metadata: Словарь статистики токенов (prompt_token_count, candidates_token_count).
-        :param system_prompt: Системный промпт (инструкция).
-        :param context_text: Сформированный контекст статей.
-        :param model_name: Имя вызванной модели.
-        :return: Словарь с метриками и URL трейса.
+        Логирование полного выполнения RAG в Langfuse с поддержкой статусов
+        (guardrail_block, cache_hit, cache_miss) и вложенными спанами.
         """
         meta = usage_metadata or {}
         input_tokens = int(meta.get("prompt_token_count", 0) or 0)
@@ -169,83 +163,123 @@ class TelemetryTracker:
         total_tokens = int(meta.get("total_token_count", input_tokens + output_tokens) or 0)
 
         effective_model = model_name or "gemini-3.5-flash-lite"
-        cost = self.estimate_cost(effective_model, input_tokens, output_tokens)
-        total_latency_ms = search_latency_ms + llm_latency_ms
+        cost = self.estimate_cost(effective_model, input_tokens, output_tokens) if status == "cache_miss" else 0.0
+        tot_latency_ms = (
+            total_latency_ms
+            if total_latency_ms is not None
+            else (search_latency_ms + llm_latency_ms)
+        )
 
         trace_id = None
         trace_url = None
 
         if self.is_active and self.client is not None:
             try:
+                trace_tags = tags or [status]
+
                 # 1. Корневой спан RAG (тип chain)
+                root_metadata = {
+                    "model": effective_model if status == "cache_miss" else "none",
+                    "status": status,
+                    "search_latency_ms": round(search_latency_ms, 2),
+                    "llm_latency_ms": round(llm_latency_ms, 2),
+                    "total_latency_ms": round(tot_latency_ms, 2),
+                    "estimated_cost_usd": round(cost, 6),
+                }
+                if extra_metadata:
+                    root_metadata.update(extra_metadata)
+
                 root = self.client.start_observation(
                     name="rag_pipeline",
                     as_type="chain",
                     input={"query": query},
-                    metadata={
-                        "model": effective_model,
-                        "search_latency_ms": round(search_latency_ms, 2),
-                        "llm_latency_ms": round(llm_latency_ms, 2),
-                        "total_latency_ms": round(total_latency_ms, 2),
-                        "estimated_cost_usd": round(cost, 6),
-                    },
+                    metadata=root_metadata,
                 )
                 trace_id = getattr(root, "trace_id", None)
 
-                # 2. Вложенный спан retrieval (тип retriever)
-                docs_summary = [
-                    {
-                        "id": doc.get("id"),
-                        "article_number": doc.get("metadata", {}).get("article_number"),
-                        "title": doc.get("metadata", {}).get("title"),
-                        "similarity_score": doc.get("similarity_score"),
-                        "rerank_score": doc.get("rerank_score"),
-                    }
-                    for doc in (retrieved_docs or [])
-                ]
+                if status == "guardrail_block":
+                    # Спан блокировки безопасности/домена
+                    g_span = root.start_observation(
+                        name="guardrail_check",
+                        as_type="guardrail",
+                        input={"query": query},
+                        output={"status": "blocked", "reason": final_answer},
+                        metadata={"latency_ms": round(tot_latency_ms, 2)},
+                    )
+                    g_span.end()
+                    root.update(output={"answer": final_answer, "status": "guardrail_block"})
+                    root.end()
 
-                ret_span = root.start_observation(
-                    name="retrieval",
-                    as_type="retriever",
-                    input={"query": query},
-                    output=docs_summary,
-                    metadata={
-                        "candidates_count": len(retrieved_docs or []),
-                        "latency_ms": round(search_latency_ms, 2),
-                    },
-                )
-                ret_span.end()
+                elif status == "cache_hit":
+                    # Спан попадания в семантический кэш
+                    c_span = root.start_observation(
+                        name="semantic_cache",
+                        as_type="tool",
+                        input={"query": query},
+                        output={
+                            "status": "cache_hit",
+                            "answer": final_answer,
+                            **(extra_metadata or {}),
+                        },
+                        metadata={"latency_ms": round(tot_latency_ms, 2)},
+                    )
+                    c_span.end()
+                    root.update(output={"answer": final_answer, "status": "cache_hit"})
+                    root.end()
 
-                # 3. Вложенный спан generation (тип generation)
-                gen_span = root.start_observation(
-                    name="generation",
-                    as_type="generation",
-                    input={
-                        "system_prompt": system_prompt or "",
-                        "context": context_text or "",
-                        "query": query,
-                    },
-                    output=final_answer,
-                    model=effective_model,
-                    usage_details={
-                        "input": input_tokens,
-                        "output": output_tokens,
-                        "total": total_tokens,
-                    },
-                    cost_details={
-                        "total": cost,
-                    },
-                    metadata={
-                        "latency_ms": round(llm_latency_ms, 2),
-                    },
-                )
-                gen_span.end()
+                else:
+                    # Стандартный RAG (cache_miss): спаны retrieval и generation
+                    docs_summary = [
+                        {
+                            "id": doc.get("id"),
+                            "article_number": doc.get("metadata", {}).get("article_number"),
+                            "title": doc.get("metadata", {}).get("title"),
+                            "similarity_score": doc.get("similarity_score"),
+                            "rerank_score": doc.get("rerank_score"),
+                        }
+                        for doc in (retrieved_docs or [])
+                    ]
 
-                # 4. Завершение корневого спана
-                root.update(output={"answer": final_answer})
-                root.end()
+                    ret_span = root.start_observation(
+                        name="retrieval",
+                        as_type="retriever",
+                        input={"query": query},
+                        output=docs_summary,
+                        metadata={
+                            "candidates_count": len(retrieved_docs or []),
+                            "latency_ms": round(search_latency_ms, 2),
+                        },
+                    )
+                    ret_span.end()
 
-                # 5. Получение ссылки на трейс
+                    gen_span = root.start_observation(
+                        name="generation",
+                        as_type="generation",
+                        input={
+                            "system_prompt": system_prompt or "",
+                            "context": context_text or "",
+                            "query": query,
+                        },
+                        output=final_answer,
+                        model=effective_model,
+                        usage_details={
+                            "input": input_tokens,
+                            "output": output_tokens,
+                            "total": total_tokens,
+                        },
+                        cost_details={
+                            "total": cost,
+                        },
+                        metadata={
+                            "latency_ms": round(llm_latency_ms, 2),
+                        },
+                    )
+                    gen_span.end()
+
+                    root.update(output={"answer": final_answer, "status": "cache_miss"})
+                    root.end()
+
+                # Получение ссылки на трейс
                 if trace_id:
                     try:
                         trace_url = self.langfuse.get_trace_url(trace_id=trace_id)
@@ -254,8 +288,7 @@ class TelemetryTracker:
                     if not trace_url:
                         trace_url = f"{self.host.rstrip('/')}/trace/{trace_id}"
 
-                # Принудительный сброс буфера перед выходом из метода,
-                # чтобы фоновый поток успевал отправить телеметрию в cloud.langfuse.com
+                # Принудительный сброс буфера
                 if self.langfuse is not None:
                     try:
                         self.langfuse.flush()
@@ -276,14 +309,16 @@ class TelemetryTracker:
             "trace_id": trace_id,
             "trace_url": trace_url,
             "is_logged": bool(trace_id and self.is_active),
+            "status": status,
             "search_latency_ms": search_latency_ms,
             "llm_latency_ms": llm_latency_ms,
-            "total_latency_ms": total_latency_ms,
+            "total_latency_ms": tot_latency_ms,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "total_tokens": total_tokens,
             "estimated_cost_usd": cost,
-            "model_name": effective_model,
+            "model_name": effective_model if status == "cache_miss" else "none",
+            "extra_metadata": extra_metadata or {},
         }
 
     def flush(self) -> None:
@@ -304,13 +339,9 @@ class TelemetryTracker:
 
     def format_metrics_badge(self, metrics: dict[str, Any]) -> str:
         """
-        Форматирует сводную плашку метрик в консоли согласно ТЗ:
-        [МЕТРИКИ ЗАПРОСА]:
-        • Задержка: 1.45 сек (Поиск: 0.15 сек | LLM: 1.30 сек)
-        • Токены: 1,340 (Контекст: 1,180 | Ответ: 160)
-        • Оценочная стоимость: $0.000137
-        • Langfuse Trace: https://cloud.langfuse.com/project/.../traces/...
+        Форматирует сводную плашку метрик в консоли.
         """
+        status = metrics.get("status", "cache_miss")
         total_sec = metrics.get("total_latency_ms", 0.0) / 1000.0
         search_sec = metrics.get("search_latency_ms", 0.0) / 1000.0
         llm_sec = metrics.get("llm_latency_ms", 0.0) / 1000.0
@@ -321,14 +352,29 @@ class TelemetryTracker:
 
         cost = metrics.get("estimated_cost_usd", 0.0)
         trace_url = metrics.get("trace_url", "Не настроен (No-Op mode)")
+        extra = metrics.get("extra_metadata", {})
 
-        lines = [
-            "[МЕТРИКИ ЗАПРОСА]:",
-            f"• Задержка: {total_sec:.2f} сек (Поиск: {search_sec:.2f} сек | LLM: {llm_sec:.2f} сек)",
-            f"• Токены: {tokens_total:,} (Контекст: {tokens_in:,} | Ответ: {tokens_out:,})",
-            f"• Оценочная стоимость: ${cost:.6f}",
-            f"• Langfuse Trace: {trace_url}",
-        ]
+        lines = ["[МЕТРИКИ ЗАПРОСА]:"]
+
+        if status == "guardrail_block":
+            lines.append("• Статус: GUARDRAIL_BLOCK (Запрос отклонён политикой безопасности/домена)")
+            lines.append(f"• Задержка: {total_sec:.3f} сек (Защита: {total_sec:.3f} сек | Поиск: 0.00 сек | LLM: 0.00 сек)")
+            lines.append("• Токены: 0 (Контекст: 0 | Ответ: 0)")
+            lines.append("• Оценочная стоимость: $0.000000")
+        elif status == "cache_hit":
+            sim = extra.get("similarity", 0.95)
+            matched = extra.get("matched_query", "")
+            lines.append(f"• Статус: CACHE_HIT (Схожесть: {sim * 100:.1f}% | Из кэша SQLite: '{matched}')")
+            lines.append(f"• Задержка: {total_sec:.3f} сек (Поиск: 0.00 сек | LLM: 0.00 сек [КЭШ])")
+            lines.append("• Токены: 0 (Экономия: 100% затрат)")
+            lines.append("• Оценочная стоимость: $0.000000")
+        else:
+            lines.append("• Статус: CACHE_MISS (Полный RAG-конвейер)")
+            lines.append(f"• Задержка: {total_sec:.2f} сек (Поиск: {search_sec:.2f} сек | LLM: {llm_sec:.2f} сек)")
+            lines.append(f"• Токены: {tokens_total:,} (Контекст: {tokens_in:,} | Ответ: {tokens_out:,})")
+            lines.append(f"• Оценочная стоимость: ${cost:.6f}")
+
+        lines.append(f"• Langfuse Trace: {trace_url}")
         return "\n".join(lines)
 
 
