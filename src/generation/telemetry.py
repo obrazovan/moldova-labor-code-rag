@@ -67,9 +67,14 @@ class TelemetryTracker:
         """
         load_dotenv()
 
-        self.public_key = public_key or os.getenv("LANGFUSE_PUBLIC_KEY")
-        self.secret_key = secret_key or os.getenv("LANGFUSE_SECRET_KEY")
-        self.host = host or os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+        self.public_key = (public_key or os.getenv("LANGFUSE_PUBLIC_KEY") or "").strip(' "\'')
+        self.secret_key = (secret_key or os.getenv("LANGFUSE_SECRET_KEY") or "").strip(' "\'')
+        self.host = (
+            host
+            or os.getenv("LANGFUSE_HOST")
+            or os.getenv("LANGFUSE_BASE_URL")
+            or "https://cloud.langfuse.com"
+        ).strip(' "\'')
 
         self.is_active = False
         self.client = None
