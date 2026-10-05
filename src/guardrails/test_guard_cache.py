@@ -2,7 +2,9 @@
 Тестовый скрипт и валидация модулей Guardrail и Semantic Cache:
 1. Запрос 1: "Как сварить молдавскую заму?" -> Guardrail Block (Out-of-Domain), 0 токенов, $0.00.
 2. Запрос 2: "Какова продолжительность отпуска?" -> Cache Miss, стандартный RAG, сохранение в кэш SQLite.
-3. Запрос 3: "Сколько дней длится отпуск?" -> Cache Hit (similarity >= 0.92), мгновенный возврат с $0.00 расходом.
+3. Запрос 3: "Сколько дней длится отпуск?" -> Cache Hit (similarity >= 0.94), мгновенный возврат с $0.00 расходом.
+4. Запрос 4: "Оплачивается ли больничный?" -> Cache Miss (интент binary_fact).
+5. Запрос 5: "Сколько платят в больничный?" -> Cache Miss (защита Intent Mismatch: quantity != binary_fact).
 """
 
 from __future__ import annotations
@@ -57,7 +59,21 @@ def run_guardrails_cache_tests() -> None:
             "title": "Тест 3: Синонимичный вопрос-парафраз (Semantic Cache Hit)",
             "query": "Сколько дней длится отпуск?",
             "expected_status": "cache_hit",
-            "description": "Семантически эквивалентный вопрос (similarity >= 0.92): мгновенный возврат ответа с $0.00 затрат.",
+            "description": "Семантически эквивалентный вопрос (similarity >= 0.94): мгновенный возврат ответа с $0.00 затрат.",
+        },
+        {
+            "id": 4,
+            "title": "Тест 4: Проверка факта оплаты больничного (Cache Miss / Binary Fact)",
+            "query": "Оплачивается ли больничный?",
+            "expected_status": "cache_miss",
+            "description": "Первичный запрос с интентом binary_fact: ответ по гарантиям ст. 123, 194 ТК РМ и запись в кэш.",
+        },
+        {
+            "id": 5,
+            "title": "Тест 5: Запрос размера оплаты больничного (Intent Mismatch -> Cache Miss)",
+            "query": "Сколько платят в больничный?",
+            "expected_status": "cache_miss",
+            "description": "Сходство 95.2%, но интент 'quantity' != 'binary_fact': кэш отклоняет совпадение и направляет в RAG.",
         },
     ]
 
