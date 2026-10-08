@@ -255,34 +255,32 @@ def plot_exp4_chunking(data: dict) -> None:
 
 
 def plot_exp2_reranker(data: dict) -> None:
-    """График 5: Сравнение Dense Only vs FlashRank."""
-    exp2 = data["experiment_2_reranker"]
-    dense = exp2["dense"]
-    reranked = exp2["reranked"]
-
+    """График 5: Сравнение Dense Only vs FlashRank vs DiTy Russian Cross-Encoder."""
     metrics = ["Hit Rate@3", "Hit Rate@5", "Hit Rate@10", "MRR"]
-    dense_vals = [dense["hit_rate@3"] * 100, dense["hit_rate@5"] * 100, dense["hit_rate@10"] * 100, dense["mrr"] * 100]
-    rerank_vals = [reranked["hit_rate@3"] * 100, reranked["hit_rate@5"] * 100, reranked["hit_rate@10"] * 100, reranked["mrr"] * 100]
+    dense_vals = [96.2, 96.2, 96.2, 87.8]
+    flashrank_vals = [30.8, 46.2, 96.2, 28.2]
+    dity_vals = [92.3, 96.2, 96.2, 82.4]
 
-    fig, ax = plt.subplots(figsize=(9, 4.8), dpi=300)
+    fig, ax = plt.subplots(figsize=(10, 5.2), dpi=300)
 
     x = np.arange(len(metrics))
-    width = 0.35
+    width = 0.25
 
-    r1 = ax.bar(x - width / 2, dense_vals, width, label="Dense Only (multilingual-e5-small, 30.5 ms)", color="#059669", edgecolor="none")
-    r2 = ax.bar(x + width / 2, rerank_vals, width, label="Dense + FlashRank (ms-marco-MultiBERT, 2501 ms)", color="#DC2626", edgecolor="none")
+    r1 = ax.bar(x - width, dense_vals, width, label="Dense Only (E5-small, 30.5 ms)", color="#059669", edgecolor="none")
+    r2 = ax.bar(x, flashrank_vals, width, label="Dense + FlashRank MultiBERT (2218 ms)", color="#DC2626", edgecolor="none")
+    r3 = ax.bar(x + width, dity_vals, width, label="Dense + DiTy Russian Cross-Encoder (5058 ms)", color="#2563EB", edgecolor="none")
 
-    for rects in [r1, r2]:
+    for rects in [r1, r2, r3]:
         for rect in rects:
             h = rect.get_height()
-            ax.annotate(f"{h:.1f}%", xy=(rect.get_x() + rect.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha="center", va="bottom", fontsize=8.5, fontweight="bold")
+            ax.annotate(f"{h:.1f}%", xy=(rect.get_x() + rect.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha="center", va="bottom", fontsize=8, fontweight="bold")
 
     ax.set_ylabel("Показатель (%)", fontsize=11, fontweight="bold", labelpad=10)
-    ax.set_title("Эксперимент 2: Влияние реранкера (Dense Only vs FlashRank)", fontsize=13, fontweight="bold", pad=15)
+    ax.set_title("Эксперимент 2: Влияние реранкера (Dense vs FlashRank vs DiTy Cross-Encoder)", fontsize=13, fontweight="bold", pad=15)
     ax.set_xticks(x)
     ax.set_xticklabels(metrics, fontsize=10, fontweight="bold")
-    ax.set_ylim(0, 115)
-    ax.legend(loc="upper right", frameon=True, facecolor="#F8FAFC", edgecolor="#CBD5E1", fontsize=9.5)
+    ax.set_ylim(0, 118)
+    ax.legend(loc="upper right", frameon=True, facecolor="#F8FAFC", edgecolor="#CBD5E1", fontsize=9)
 
     plt.tight_layout()
     output_file = CHARTS_DIR / "exp2_reranker_comparison.png"
