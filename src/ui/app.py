@@ -307,6 +307,8 @@ def main() -> None:
                 elif status == "cache_hit":
                     similarity_pct = metrics.get("extra_metadata", {}).get("similarity", 0.95) * 100
                     st.markdown(f'<div class="badge-block badge-cache">⚡ CACHE HIT (Ответ из SQLite кэша | Сходство: {similarity_pct:.1f}%)</div>', unsafe_allow_html=True)
+                elif status == "direct_rag":
+                    st.markdown('<div class="badge-block badge-rag">🚀 ПОЛНЫЙ RAG (Кэш отключен: ChromaDB + Gemini)</div>', unsafe_allow_html=True)
                 else:
                     st.markdown('<div class="badge-block badge-rag">🔄 CACHE MISS (Полный RAG: ChromaDB + Cross-Encoder + Gemini)</div>', unsafe_allow_html=True)
 
@@ -379,6 +381,9 @@ def main() -> None:
             elif ans_status == "cache_hit":
                 similarity_pct = ans_metrics.get("extra_metadata", {}).get("similarity", 0.95) * 100
                 st.markdown(f'<div class="badge-block badge-cache">⚡ CACHE HIT (Ответ из SQLite кэша | Сходство: {similarity_pct:.1f}%)</div>', unsafe_allow_html=True)
+            elif ans_status == "direct_rag":
+                reranker_part = " + Cross-Encoder" if use_reranker else ""
+                st.markdown(f'<div class="badge-block badge-rag">🚀 ПОЛНЫЙ RAG (Кэш отключен: ChromaDB{reranker_part} + Gemini)</div>', unsafe_allow_html=True)
             else:
                 st.markdown('<div class="badge-block badge-rag">🔄 CACHE MISS (Полный RAG: ChromaDB + Cross-Encoder + Gemini)</div>', unsafe_allow_html=True)
 

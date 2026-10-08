@@ -296,6 +296,8 @@ class RAGService:
                 sources=sources,
             )
 
+        status_name = "cache_miss" if use_cache else "direct_rag"
+
         telemetry_metrics = self.telemetry.log_rag_execution(
             query=clean_query,
             retrieved_docs=retrieved_docs,
@@ -306,8 +308,8 @@ class RAGService:
             system_prompt=self.llm_client.system_prompt,
             context_text=user_message,
             model_name=getattr(gen_result, "model_name", self.llm_client.model_name),
-            status="cache_miss",
-            tags=["cache_miss"],
+            status=status_name,
+            tags=[status_name],
             total_latency_ms=total_latency_ms,
         )
         metrics_badge = self.telemetry.format_metrics_badge(telemetry_metrics)
@@ -322,7 +324,7 @@ class RAGService:
             "search_latency_sec": search_latency_sec,
             "llm_latency_sec": llm_latency_sec,
             "total_latency_sec": total_latency_sec,
-            "status": "cache_miss",
+            "status": status_name,
             "raw_retrieved": search_result.get("raw_retrieved", []),
             "filtered_docs": search_result.get("filtered", []),
         }
